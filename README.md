@@ -32,3 +32,13 @@
 Для первой загрузки голоса нужен интернет. Лучше всего открывать через GitHub Pages: тогда файлы из `tts/` берутся из этого репозитория.
 
 Лицензии: Piper и piper-wasm — MIT, espeak-ng — GPL-3.0, условия каждого голоса — в его `MODEL_CARD` в [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices).
+
+## Приложение для Android (APK)
+
+Папка `android/` — обёртка, которая превращает редактор в приложение «Нарезка»:
+- страница работает из самого APK, без интернета (кроме загрузки голосов);
+- выбор видео и фото из галереи, запись голоса с микрофона;
+- готовое видео сохраняется в галерею: `Movies/Нарезка`;
+- Fish Audio вызывается через приложение, без ограничений браузера.
+
+Сборка без Android SDK: `python3 android/build.py --android-jar android.jar --dx dx.jar` (android.jar — из Sable/android-platforms, dx — собранный из AOSP dalvik). `android/signing-key.pem` — ключ подписи: с ним новые версии ставятся поверх старой без потери проектов.

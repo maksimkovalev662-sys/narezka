@@ -319,6 +319,8 @@ const lerp = (a, b, t) => a + (b - a) * t;
 const uid = () => Math.random().toString(36).slice(2, 9) + (Date.now() % 1679616).toString(36);
 const now = () => performance.now();
 const isStandalone = !(window.claude && typeof window.claude.use === 'function');
+// set by the Android app (Нарезка.apk): saving to the gallery and network calls without browser limits
+const NATIVE = window.NarezkaNative || null;
 const FONT_UI = '"Golos Text", system-ui, sans-serif';
 const FONT_MONO = '"JetBrains Mono", ui-monospace, monospace';
 const EMOJI_FONT = '"Noto Color Emoji","Apple Color Emoji","Segoe UI Emoji","Twemoji Mozilla",sans-serif';
@@ -3409,14 +3411,14 @@ function ttsPrefs(v) {
 }
 function ttsErrorText(e) {
   const s = String(e && e.message || e);
-  if (/ort|importScripts|NetworkError|Failed to fetch|HTTP|fetch failed|Load failed|piper_phonemize/i.test(s)) return 'Не получилось скачать движок или голос. Нужен интернет — только в первый раз для каждого голоса. Если не помогает, открой «Нарезку» в Chrome по ссылке GitHub Pages.';
+  if (/ort|importScripts|NetworkError|Failed to fetch|HTTP|fetch failed|Load failed|piper_phonemize/i.test(s)) return 'Не получилось скачать движок или голос. Нужен интернет — только в первый раз для каждого голоса.' + (NATIVE ? '' : ' Если не помогает, открой «Нарезку» в Chrome по ссылке GitHub Pages.');
   if (/memory|alloc/i.test(s)) return 'Телефону не хватило памяти. Закрой другие вкладки и попробуй ещё раз.';
   return 'Не получилось озвучить: ' + s;
 }
 
 // --- Fish Audio: cloud voices through the person's own API key (fish.audio) ---
 const FISH_API = 'https://api.fish.audio';
-const FISH_MODELS = [['s2.1-pro', 'S2.1 Pro'], ['s2.1-pro-free', 'S2.1 бесплатный'], ['s1', 'S1']];
+const FISH_MODELS = [['s2.1-pro-free', 'S2.1 бесплатный'], ['s2.1-pro', 'S2.1 Pro'], ['s1', 'S1']];
 function fishKey(v) {
   try {
     if (v !== undefined) { if (v) localStorage.setItem('narezka.fishKey', v); else localStorage.removeItem('narezka.fishKey'); return v; }
@@ -3431,9 +3433,27 @@ function fishErr(status, body) {
   if (status === 503) return 'Сервер Fish Audio перегружен. Попробуй чуть позже.';
   return 'Fish Audio ответил ошибкой ' + status + (msg ? ': ' + msg : '');
 }
+const nativeHttpWait = new Map();
+window.__nativeHttp = (id, status, type, b64) => {
+  const w = nativeHttpWait.get(id);
+  if (!w) return;
+  nativeHttpWait.delete(id);
+  if (status <= 0) { w.rej(new Error(b64 || 'network')); return; }
+  const bin = atob(b64 || ''), u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  w.res(new Response(u, { status, headers: { 'content-type': type || 'application/octet-stream' } }));
+};
+function nativeFetch(url, opts) {
+  return new Promise((res, rej) => {
+    const id = uid();
+    nativeHttpWait.set(id, { res, rej });
+    try { NATIVE.http(id, (opts && opts.method) || 'GET', url, JSON.stringify((opts && opts.headers) || {}), (opts && opts.body) || ''); }
+    catch (e) { nativeHttpWait.delete(id); rej(e); }
+  });
+}
 async function fishFetch(path, opts) {
   let r;
-  try { r = await fetch(FISH_API + path, opts); }
+  try { r = NATIVE && NATIVE.http ? await nativeFetch(FISH_API + path, opts) : await fetch(FISH_API + path, opts); }
   catch (e) { throw new Error('FISHNET'); }
   if (!r.ok) { let body = null; try { body = await r.json(); } catch (e) { /* not json */ } throw new Error('FISH:' + fishErr(r.status, body)); }
   return r;
@@ -3614,7 +3634,7 @@ function openTts() {
 function fishText(e) {
   const s = String(e && e.message || e);
   if (s.startsWith('FISH:')) return s.slice(5);
-  if (s === 'FISHNET') return 'Не удалось связаться с Fish Audio. Нет интернета, или их сервер не разрешает запросы со страницы — тогда этот вариант сработает только в приложении.';
+  if (s === 'FISHNET') return NATIVE ? 'Не удалось связаться с Fish Audio. Проверь интернет.' : 'Не удалось связаться с Fish Audio. Нет интернета, или их сервер не разрешает запросы со страницы — тогда этот вариант сработает только в приложении.';
   if (/decode/i.test(s)) return 'Fish Audio прислал звук, который браузер не смог прочитать.';
   return 'Не получилось озвучить: ' + s;
 }
@@ -3838,7 +3858,26 @@ function showExportResult(blob, x) {
     d.append(el('h3', null, 'Видео готово'), el('div', { class: 'xprev' }, v), el('div', { class: 'xmeta' }, el('span', null, `${ext.toUpperCase()} · ${x.W}×${x.H} · ${x.fps} к/с`), el('span', null, `${fmtSize(blob.size)} · ${fmtDur(D)}`)), btns);
   });
 }
+async function saveNative(blob, name) {
+  const id = NATIVE.saveStart(name, blob.type || 'video/mp4');
+  if (!id) { toast('Разреши доступ к памяти и нажми «Сохранить» ещё раз', 4000); return; }
+  const step = 1 << 20;
+  try {
+    for (let o = 0; o < blob.size; o += step) {
+      const url = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = () => rej(fr.error); fr.readAsDataURL(blob.slice(o, o + step)); });
+      if (!NATIVE.saveChunk(id, url.slice(url.indexOf(',') + 1))) throw new Error('write');
+      toast('Сохраняю… ' + Math.min(100, Math.round((o + step) / blob.size * 100)) + '%', 8000);
+    }
+    const r = NATIVE.saveEnd(id);
+    if (r !== 'ok') throw new Error(r || 'save');
+    toast('Видео сохранено в галерею: Movies/Нарезка', 3500);
+  } catch (e) {
+    try { NATIVE.saveAbort(id); } catch (x) { /* ignore */ }
+    toast('Не получилось сохранить видео', 4000);
+  }
+}
 async function saveBlob(blob, name) {
+  if (NATIVE && NATIVE.saveStart) { await saveNative(blob, name); return; }
   const dl = await dlCap;
   if (dl) {
     try { await dl.save({ filename: name, data: blob }); toast('Видео сохранено'); }
@@ -4084,6 +4123,15 @@ function bindUI() {
   $('#btnNew').addEventListener('click', () => pickMedia('new'));
   $('#btnBlank').addEventListener('click', () => newBlankProject());
   $('#btnClose').addEventListener('click', () => closeEditor());
+  window.__narezkaBack = () => {
+    if (!modal.hidden) return true;
+    if (sheetState) { closeSheet(); return true; }
+    if ($('#editor').hidden) return false;
+    if (SEL) { select(null); return true; }
+    if (SUB) { SUB = null; toolsRender(); return true; }
+    closeEditor();
+    return true;
+  };
   $('#btnRatio').addEventListener('click', () => openFormat());
   $('#btnExport').addEventListener('click', () => openExport());
   $('#btnPlay').addEventListener('click', () => togglePlay());
