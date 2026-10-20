@@ -13,8 +13,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
 PACKAGE = 'com.foptop.narezka'
-VERSION_CODE = 3
-VERSION_NAME = '1.2'
+VERSION_CODE = 4
+VERSION_NAME = '1.3'
 MIN_SDK, TARGET_SDK = 24, 33
 
 ANDROID_NS = 'http://schemas.android.com/apk/res/android'
@@ -397,6 +397,9 @@ def main():
     ]
     for f in sorted(os.listdir(os.path.join(ROOT, 'tts'))):
         entries.append(('assets/www/tts/' + f, open(os.path.join(ROOT, 'tts', f), 'rb').read(), False))
+    for f in sorted(os.listdir(os.path.join(ROOT, 'sfx'))):
+        if f.endswith('.mp3'):
+            entries.append(('assets/www/sfx/' + f, open(os.path.join(ROOT, 'sfx', f), 'rb').read(), False))
     unsigned = os.path.join(tmp, 'unsigned.apk')
     write_zip(unsigned, entries)
     key_pem, cert_der = ensure_key(a.key)

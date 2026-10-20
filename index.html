@@ -743,8 +743,8 @@ const SX = {
     return sh;
   },
 };
-const SFX_CATS = [['pop', 'Популярное'], ['trans', 'Переходы'], ['meme', 'Мемы'], ['hit', 'Удары'], ['ui', 'Интерфейс'], ['magic', 'Магия'], ['cartoon', 'Мультики'], ['amb', 'Атмосфера'], ['horror', 'Хоррор']];
-const SFX_POPULAR = ['whoosh', 'deepBoom', 'rimshot', 'fail', 'boing', 'ding', 'pop', 'glitch', 'riser', 'impact', 'shutter', 'beep', 'crickets', 'dundun', 'tada', 'punch', 'notify', 'magic'];
+const SFX_CATS = [['pop', 'Популярное'], ['trans', 'Переходы'], ['meme', 'Мемы'], ['hit', 'Удары'], ['ui', 'Интерфейс'], ['voice', 'Голоса'], ['magic', 'Магия'], ['cartoon', 'Мультики'], ['jingle', 'Джинглы'], ['animal', 'Животные'], ['amb', 'Атмосфера'], ['horror', 'Хоррор']];
+const SFX_POPULAR = ['f003', 'f000', 'f020', 'f029', 'f030', 'f028', 'f052', 'f064', 'f072', 'f124', 'f168', 'f150', 'whoosh', 'deepBoom', 'rimshot', 'fail', 'boing', 'ding', 'pop', 'glitch', 'riser', 'impact', 'shutter', 'beep', 'crickets', 'dundun', 'tada', 'punch', 'notify', 'magic'];
 (() => {
   const T = SX.tone, N = SX.noise;
   Object.assign(SFX_DEF.whoosh, { cat: 'trans' }); Object.assign(SFX_DEF.boom, { cat: 'hit' }); Object.assign(SFX_DEF.ding, { cat: 'ui' });
@@ -817,10 +817,26 @@ const SFX_POPULAR = ['whoosh', 'deepBoom', 'rimshot', 'fail', 'boing', 'ding', '
     creak: { name: 'Скрип двери', cat: 'horror', dur: 2, build(c) { const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(90, 0); [.4, .8, 1.2, 1.6, 1.9].forEach((t, i) => o.frequency.linearRampToValueAtTime(70 + hash(i) * 120, t)); const f = c.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 900; f.Q.value = 4; const g = c.createGain(); g.gain.setValueAtTime(0, 0); g.gain.linearRampToValueAtTime(.4, .2); g.gain.linearRampToValueAtTime(0, 1.95); o.connect(f).connect(g).connect(c.destination); o.start(0); o.stop(2); } },
   });
 })();
+// recorded CC0 sounds (Kenney and other public-domain packs, see sfx/CREDITS.md), shipped as small mp3 files
+const SFX_FILES = [["f000","Взмах 1","trans",0.16],["f001","Взмах 2","trans",0.16],["f002","Взмах 3","trans",0.18],["f003","Свуш 1","trans",0.39],["f004","Свуш 2","trans",0.55],["f005","Свуш 3","trans",0.68],["f006","Свуш 4","trans",0.24],["f007","Свуш 5","trans",0.29],["f008","Свуш 6","trans",0.26],["f009","Вихрь 1","trans",2.59],["f010","Вихрь 2","trans",1.25],["f011","Вихрь 3","trans",1.44],["f012","Вихрь 4","trans",2.3],["f013","Вихрь короткий 1","trans",0.68],["f014","Вихрь короткий 2","trans",1.15],["f015","Свист ветра 1","trans",0.73],["f016","Свист ветра 2","trans",0.16],["f017","Свист ветра 3","trans",0.24],["f018","Рассечение","trans",0.16],["f019","Мягкий взмах","trans",0.18],["f020","Вжух с ударом 1","trans",0.65],["f021","Вжух с ударом 2","trans",0.97],["f022","Вжух-тук","trans",0.13],["f024","Цифровой глитч","trans",0.08],["f027","Иголка на пластинку","trans",6.03],["f028","Пластинка заела","meme",6.03],["f029","Свисток: взлёт","meme",0.68],["f030","Свисток: падение","meme",0.73],["f031","Свисток: волна вверх","meme",1.65],["f032","Свисток: волна вниз","meme",2.32],["f033","Свисток: пьяный","meme",4.47],["f034","Свисток: прыг-скок","meme",4.88],["f035","Свисток: хаос","meme",4.18],["f036","Свисток: трель вниз","meme",1.02],["f037","Свисток: туда-сюда","meme",0.89],["f038","Свисток: писк","meme",1.12],["f039","Пружина 1","meme",0.99],["f040","Пружина 2","meme",1.1],["f041","Пружина 3","meme",0.42],["f042","Пружина 4","meme",0.57],["f043","Смыв","meme",5.8],["f044","Гонг","meme",1.38],["f045","Гонг 2","meme",0.94],["f046","Странный звук 1","cartoon",0.47],["f047","Странный звук 2","cartoon",0.31],["f048","Странный звук 3","cartoon",0.71],["f049","Странный звук 4","cartoon",0.31],["f050","Странный звук 5","cartoon",0.47],["f051","Странный звук 6","cartoon",0.31],["f052","Удар кулаком","hit",0.55],["f053","Удар кулаком 2","hit",0.39],["f054","Удар средний","hit",0.31],["f055","Лёгкий удар","hit",0.18],["f056","Удар по металлу","hit",0.21],["f057","Удар по металлу 2","hit",0.24],["f058","Удар по дереву","hit",0.34],["f059","Удар по пластине","hit",0.52],["f060","Удар по стеклу","hit",0.29],["f061","Удар колокола","hit",1.23],["f062","Мягкий удар","hit",0.55],["f063","Кирка","hit",0.65],["f064","Бах 1","hit",0.86],["f065","Бах 2","hit",0.71],["f066","Бах 3","hit",0.91],["f067","Бах 4","hit",0.94],["f068","Пушка","hit",0.91],["f069","Фейерверк","hit",0.91],["f070","Фейерверк 2","hit",1.04],["f071","Взрыв (запись)","hit",0.31],["f072","Бьётся стекло 1","hit",0.44],["f073","Бьётся стекло 2","hit",0.37],["f074","Бьётся стекло 3","hit",0.63],["f075","Ломается дерево 1","hit",0.16],["f076","Ломается дерево 2","hit",0.1],["f077","Падает металл 1","hit",0.81],["f078","Падает металл 2","hit",0.63],["f079","Шмяк 1","hit",0.44],["f080","Шмяк 2","hit",0.52],["f081","Шмяк 3","hit",0.24],["f082","Хлопок дверью","hit",0.5],["f083","Клик","ui",0.13],["f084","Клик 2","ui",0.05],["f085","Подтверждение","ui",0.31],["f086","Подтверждение 2","ui",0.55],["f087","Ошибка (запись)","ui",0.18],["f088","Ошибка 2","ui",0.26],["f089","Вопрос","ui",0.52],["f090","Выбор","ui",0.08],["f091","Открыть","ui",0.18],["f092","Закрыть","ui",0.18],["f093","Развернуть","ui",0.29],["f094","Свернуть","ui",0.29],["f095","Переключатель","ui",0.13],["f096","Щипок","ui",0.13],["f097","Бонг","ui",0.16],["f098","Капля","ui",0.16],["f099","Прокрутка","ui",0.99],["f100","Тик","ui",0.05],["f101","Щелчок выключателя","ui",0.18],["f102","Наведение","ui",0.21],["f103","Клик мыши","ui",0.1],["f104","Двойной сигнал","ui",0.39],["f105","Тройной сигнал","ui",0.52],["f106","Пеп","ui",0.34],["f107","Сигнал вверх","ui",0.42],["f108","Сигнал вниз","ui",0.42],["f109","Колокольчик","ui",1.18],["f110","Колокольчик 2","ui",0.42],["f111","Бонус 1","magic",0.99],["f112","Бонус 2","magic",0.89],["f113","Бонус 3","magic",0.31],["f114","Фазовый прыжок","magic",0.39],["f115","Фазер вверх","magic",0.42],["f116","Фазер вниз","magic",0.39],["f117","Разряд вверх","magic",1.12],["f118","Разряд вниз","magic",1.28],["f119","Лазер 1","magic",0.81],["f120","Лазер 2","magic",0.73],["f121","Лазер 3","magic",0.76],["f122","Космический мусор","magic",1.36],["f123","Зап","magic",0.94],["f124","Go! (муж.)","voice",0.63],["f125","Ready (муж.)","voice",0.68],["f126","Set (муж.)","voice",0.52],["f127","Congratulations (муж.)","voice",1.52],["f128","Game over (муж.)","voice",1.38],["f129","You win (муж.)","voice",0.97],["f130","You lose (муж.)","voice",1.36],["f131","Level up (муж.)","voice",0.81],["f132","Mission completed (муж.)","voice",1.23],["f133","Mission failed (муж.)","voice",1.07],["f134","New highscore (муж.)","voice",1.2],["f135","Correct (муж.)","voice",0.65],["f136","Wrong (муж.)","voice",0.71],["f137","Hurry up (муж.)","voice",0.65],["f138","Time over (муж.)","voice",0.94],["f139","Final round (муж.)","voice",1.1],["f140","One (муж.)","voice",0.63],["f141","Two (муж.)","voice",0.6],["f142","Three (муж.)","voice",0.78],["f143","Go, go, go! (муж.)","voice",0.94],["f144","Fire in the hole (муж.)","voice",1.36],["f145","Go! (жен.)","voice",0.57],["f146","Congratulations (жен.)","voice",1.28],["f147","Game over (жен.)","voice",1.23],["f148","You win (жен.)","voice",0.91],["f149","Level up (жен.)","voice",0.73],["f150","Джингл: Ретро 1","jingle",1.72],["f151","Джингл: Ретро 2","jingle",0.57],["f152","Джингл: Ретро 3","jingle",0.71],["f153","Джингл: Ретро 4","jingle",0.34],["f154","Джингл: Ретро 5","jingle",0.81],["f155","Джингл: Саксофон 1","jingle",0.37],["f156","Джингл: Саксофон 2","jingle",0.37],["f157","Джингл: Саксофон 3","jingle",0.37],["f158","Джингл: Саксофон 4","jingle",0.84],["f159","Джингл: Пиццикато 1","jingle",0.52],["f160","Джингл: Пиццикато 2","jingle",0.57],["f161","Джингл: Пиццикато 3","jingle",0.84],["f162","Джингл: Стилдрам 1","jingle",0.97],["f163","Джингл: Стилдрам 2","jingle",0.99],["f164","Джингл: Стилдрам 3","jingle",0.94],["f165","Джингл: Хит 1","jingle",0.26],["f166","Джингл: Хит 2","jingle",0.63],["f167","Джингл: Хит 3","jingle",0.26],["f168","Мяу 1","animal",1.65],["f169","Мяу 2","animal",1.38],["f170","Мяу 3","animal",1.28],["f171","Мяу 4","animal",0.63],["f172","Мяу 5","animal",1.1],["f173","Мяу 6","animal",6.03],["f174","Всплеск 1","amb",0.91],["f175","Всплеск 2","amb",0.57],["f176","Всплеск 3","amb",0.55],["f177","Пузыри 1","cartoon",0.55],["f178","Пузыри 2","cartoon",0.26],["f179","Пузыри 3","cartoon",0.55],["f180","Слизь 1","horror",0.34],["f181","Слизь 2","horror",0.31],["f182","Дождь (запись)","amb",6.87],["f183","Шум пластинки","amb",8.05],["f184","Дверь открывается","horror",0.37],["f185","Ключ в замке","amb",0.34],["f186","Бумага","amb",0.44]];
+const SFX_BASES = ['sfx/', 'https://cdn.jsdelivr.net/gh/maksimkovalev662-sys/narezka@main/sfx/'];
+for (const [id, name, cat, dur] of SFX_FILES) SFX_DEF[id] = { name, cat, dur, file: id + '.mp3' };
+async function sfxFileBlob(def) {
+  if (def._blob) return def._blob;
+  for (const b of SFX_BASES) {
+    try { const r = await fetch(new URL(b + def.file, location.href).href); if (r.ok) { const bl = await r.blob(); if (bl.size > 100) return (def._blob = new Blob([bl], { type: 'audio/mpeg' })); } } catch (e) { /* try the next copy */ }
+  }
+  throw new Error('sfx file');
+}
 const sfxBufs = {};
 async function renderSfx(id) {
   if (sfxBufs[id]) return sfxBufs[id];
   const def = SFX_DEF[id], sr = 44100;
+  if (def.file) {
+    const blob = await sfxFileBlob(def);
+    sfxBufs[id] = await new OfflineAudioContext(1, 1, sr).decodeAudioData(await blob.arrayBuffer());
+    return sfxBufs[id];
+  }
   const oc = new OfflineAudioContext(1, Math.ceil(def.dur * sr), sr);
   def.build(oc);
   const buf = await oc.startRendering(), d = buf.getChannelData(0);
@@ -846,7 +862,8 @@ async function sfxMedia(id) {
   const buf = await renderSfx(id);
   const tmp = {};
   setPeaksFromBuffer(tmp, buf);
-  const m = await registerMedia(encodeWav(buf), 'audio', SFX_DEF[id].name, null, true, { duration: buf.duration, peaks: tmp.peaks, peakRate: tmp.peakRate });
+  const def = SFX_DEF[id];
+  const m = await registerMedia(def.file ? await sfxFileBlob(def) : encodeWav(buf), 'audio', def.name, null, true, { duration: buf.duration, peaks: tmp.peaks, peakRate: tmp.peakRate });
   sfxMediaIds[id] = m.id;
   return m;
 }
@@ -3119,11 +3136,11 @@ function openSfx() {
       for (const id of ids) {
         const def = SFX_DEF[id];
         const prev = el('button', { class: 'iconbtn sm', 'aria-label': 'Прослушать «' + def.name + '»', html: icon('play'), onclick: () => previewSfx(id) });
-        list.append(el('div', { class: 'lrow' }, prev, el('div', { class: 'lname' }, el('b', null, def.name), el('span', null, fmtSec(def.dur))), el('button', { class: 'chipbtn', onclick: () => addSfx(id) }, '+ Добавить')));
+        list.append(el('div', { class: 'lrow' }, prev, el('div', { class: 'lname' }, el('b', null, def.name), el('span', null, fmtSec(def.dur) + (def.file ? ' · запись' : ' · синтез'))), el('button', { class: 'chipbtn', onclick: () => addSfx(id) }, '+ Добавить')));
       }
     };
     body.append(
-      el('p', { class: 'hint' }, 'Звук встанет на позицию курсора. Все ' + Object.keys(SFX_DEF).length + ' звуков синтезируются прямо на устройстве.'),
+      el('p', { class: 'hint' }, 'Звук встанет на позицию курсора. ' + Object.keys(SFX_DEF).length + ' звуков: записи из открытых библиотек (CC0, можно для монетизации) и синтез прямо на устройстве.'),
       chipRow(SFX_CATS, sfxCat, v => { sfxCat = v; draw(); }, 'scroll'),
       list,
     );

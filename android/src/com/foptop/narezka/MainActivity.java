@@ -168,6 +168,7 @@ public class MainActivity extends Activity {
         if (p.endsWith(".json")) return "application/json";
         if (p.endsWith(".wasm")) return "application/wasm";
         if (p.endsWith(".png")) return "image/png";
+        if (p.endsWith(".mp3")) return "audio/mpeg";
         if (p.endsWith(".svg")) return "image/svg+xml";
         return "application/octet-stream";
     }
