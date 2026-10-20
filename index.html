@@ -459,6 +459,7 @@ const ICONS = {
   rec: '<circle class="f" cx="12" cy="12" r="7"/>',
   stop: '<rect class="f" x="7" y="7" width="10" height="10" rx="2"/>',
   share: '<circle cx="18" cy="5.5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="18.5" r="2.5"/><path d="M8.3 10.8l7.4-4.1M8.3 13.2l7.4 4.1"/>',
+  speak: '<path d="M4 5.5h11a1.5 1.5 0 0 1 1.5 1.5v6.5a1.5 1.5 0 0 1-1.5 1.5H9l-4 3.5V15H4a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 4 5.5z"/><path d="M6.5 9h6M6.5 11.5h4"/><path d="M19 8.5a4 4 0 0 1 0 5.5"/><path d="M21.2 6.5a7 7 0 0 1 0 9.5"/>',
   save: '<path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19.5h14"/>',
 };
 function icon(n, cls) { return `<svg class="ic${cls ? ' ' + cls : ''}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`; }
@@ -2571,6 +2572,7 @@ function rootTools() {
 }
 const SUBTOOLS = {
   audio: () => [
+    ['tts', 'Текст в речь', 'speak', () => openTts()],
     ['music', 'Музыка', 'music', () => pickAudio()],
     ['sfx', 'Звуки', 'bell', () => openSfx()],
     ['extract', 'Из видео', 'extract', () => { const c = clipAtPlayhead(); if (c && c.kind === 'video') extractAudio(c); else toast('Поставь курсор на видеоклип'); }],
@@ -3131,6 +3133,374 @@ function animPaneText(pane, it) {
       if (id !== 'none') previewAnim(it, key);
     }, 'scroll'));
   }
+}
+
+// ===== Text to speech: Piper voices (rhasspy/piper) run on the device =====
+// Engine: espeak-ng phonemizer compiled to WASM (diffusionstudio/piper-wasm) + onnxruntime-web.
+// A voice model (~60 MB) downloads once from Hugging Face and is kept in this browser.
+const TTS_VOICES = [
+  { id: 'ru_RU-denis-medium', name: 'Денис', sub: 'мужской' },
+  { id: 'ru_RU-dmitri-medium', name: 'Дмитрий', sub: 'мужской' },
+  { id: 'ru_RU-ruslan-medium', name: 'Руслан', sub: 'мужской' },
+  { id: 'ru_RU-irina-medium', name: 'Ирина', sub: 'женский' },
+];
+const TTS_HF = [
+  'https://huggingface.co/diffusionstudio/piper-voices/resolve/main/',
+  'https://huggingface.co/rhasspy/piper-voices/resolve/main/',
+  'https://hf-mirror.com/rhasspy/piper-voices/resolve/main/',
+];
+const TTS_ORT = [
+  'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/',
+  'https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.18.0/',
+];
+const TTS_PH_CDN = 'https://cdn.jsdelivr.net/npm/@diffusionstudio/piper-wasm@1.0.0/build/';
+const TTS_CFG_DEFAULT = { audio: { sample_rate: 22050 }, espeak: { voice: 'ru' }, inference: { noise_scale: .667, length_scale: 1, noise_w: .8 }, num_speakers: 1 };
+function ttsPath(id) { const p = id.split('-'), lang = p[0]; return lang.split('_')[0] + '/' + lang + '/' + p[1] + '/' + p[2] + '/' + id + '.onnx'; }
+
+// voice files live in their own small database, apart from projects
+const TTSStore = {
+  db: null,
+  open() {
+    if (this.db) return Promise.resolve(this.db);
+    return new Promise(res => {
+      try {
+        const rq = indexedDB.open('narezka-tts', 1);
+        rq.onupgradeneeded = () => { if (!rq.result.objectStoreNames.contains('files')) rq.result.createObjectStore('files', { keyPath: 'k' }); };
+        rq.onsuccess = () => { this.db = rq.result; res(this.db); };
+        rq.onerror = rq.onblocked = () => res(null);
+      } catch (e) { res(null); }
+    });
+  },
+  async req(mode, fn) {
+    const db = await this.open();
+    if (!db) return undefined;
+    return new Promise(res => {
+      try {
+        const t = db.transaction('files', mode), r = fn(t.objectStore('files'));
+        let out;
+        if (r) r.onsuccess = () => { out = r.result; };
+        t.oncomplete = () => res(out);
+        t.onerror = t.onabort = () => res(undefined);
+      } catch (e) { res(undefined); }
+    });
+  },
+  get(k) { return this.req('readonly', s => s.get(k)); },
+  put(k, v) { return this.req('readwrite', s => s.put({ k, v, at: Date.now() })); },
+  del(k) { return this.req('readwrite', s => s.delete(k)); },
+};
+
+async function ttsFetch(urls, onProg) {
+  let last = null;
+  for (const u of urls) {
+    try {
+      const r = await fetch(u, { mode: 'cors' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const total = +r.headers.get('content-length') || 0;
+      if (!r.body || !onProg) return await r.blob();
+      const rd = r.body.getReader(), parts = [];
+      let got = 0;
+      for (;;) {
+        const { done, value } = await rd.read();
+        if (done) break;
+        parts.push(value); got += value.length;
+        onProg(got, total);
+      }
+      return new Blob(parts);
+    } catch (e) { last = e; }
+  }
+  throw last || new Error('fetch failed');
+}
+const ttsHave = {};
+async function ttsVoiceCached(id) {
+  if (ttsHave[id]) return true;
+  const r = await TTSStore.get('model:' + id);
+  return (ttsHave[id] = !!(r && r.v && r.v.size > 1e6));
+}
+async function ttsVoiceFiles(id, onProg) {
+  const path = ttsPath(id);
+  let cfg = null;
+  const cr = await TTSStore.get('cfg:' + id);
+  if (cr && cr.v) cfg = cr.v;
+  else {
+    try { cfg = JSON.parse(await (await ttsFetch(TTS_HF.map(b => b + path + '.json'))).text()); await TTSStore.put('cfg:' + id, cfg); }
+    catch (e) { cfg = null; }
+  }
+  cfg = Object.assign({}, TTS_CFG_DEFAULT, cfg || {});
+  let blob = null;
+  const mr = await TTSStore.get('model:' + id);
+  if (mr && mr.v && mr.v.size > 1e6) blob = mr.v;
+  else {
+    blob = await ttsFetch(TTS_HF.map(b => b + path), onProg);
+    if (blob.size < 1e6) throw new Error('bad model file');
+    await TTSStore.put('model:' + id, blob);
+    ttsHave[id] = true;
+  }
+  return { cfg, blob };
+}
+
+// the engine runs in a background worker so the editor stays responsive
+const TTS_WORKER_SRC = `
+let ph = null, sessions = {};
+async function getBuf(url) { const r = await fetch(url); if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url); return r.arrayBuffer(); }
+async function init(m) {
+  let err = null;
+  for (const b of m.ortBases) {
+    try { importScripts(b + 'ort.min.js'); self.ort.env.wasm.wasmPaths = b; self.ort.env.wasm.numThreads = 1; err = null; break; }
+    catch (e) { err = e; }
+  }
+  if (err || !self.ort) throw new Error('ort: ' + (err && err.message));
+  importScripts(m.phBase + 'piper_phonemize.js');
+  const [wasm, data] = await Promise.all([getBuf(m.phBase + 'piper_phonemize.wasm'), getBuf(m.phBase + 'piper_phonemize.data')]);
+  ph = { wasm, data };
+}
+function phonemize(text, lang) {
+  return new Promise((res, rej) => {
+    let got = false;
+    self.createPiperPhonemize({
+      wasmBinary: ph.wasm,
+      getPreloadedPackage: () => ph.data,
+      locateFile: u => u,
+      print: d => { try { const o = JSON.parse(d); got = true; res(o.phoneme_ids); } catch (e) { /* not our line */ } },
+      printErr: () => {},
+    }).then(mod => {
+      mod.callMain(['-l', lang, '--input', JSON.stringify([{ text }]), '--espeak_data', '/espeak-ng-data']);
+      setTimeout(() => { if (!got) rej(new Error('no phonemes')); }, 0);
+    }, rej);
+  });
+}
+async function synth(m) {
+  let s = sessions[m.voice];
+  if (!s) {
+    if (!m.model) return { need: true };
+    s = sessions[m.voice] = await self.ort.InferenceSession.create(new Uint8Array(m.model), { executionProviders: ['wasm'] });
+  }
+  const c = m.cfg, sr = c.audio.sample_rate, inf = c.inference, out = [], marks = [];
+  const gap = new Float32Array(Math.round(sr * m.pause));
+  let n = 0;
+  for (let i = 0; i < m.parts.length; i++) {
+    self.postMessage({ type: 'prog', id: m.id, i, n: m.parts.length });
+    const ids = await phonemize(m.parts[i], c.espeak.voice);
+    if (!ids || !ids.length) continue;
+    const feeds = {
+      input: new self.ort.Tensor('int64', BigInt64Array.from(ids, x => BigInt(x)), [1, ids.length]),
+      input_lengths: new self.ort.Tensor('int64', BigInt64Array.from([BigInt(ids.length)]), [1]),
+      scales: new self.ort.Tensor('float32', Float32Array.from([inf.noise_scale, inf.length_scale * m.lengthScale, inf.noise_w]), [3]),
+    };
+    if ((c.num_speakers || 1) > 1) feeds.sid = new self.ort.Tensor('int64', BigInt64Array.from([0n]), [1]);
+    const r = await s.run(feeds);
+    const pcm = (r.output || r[Object.keys(r)[0]]).data;
+    if (out.length) { out.push(gap); n += gap.length; }
+    marks.push([i, n / sr, pcm.length / sr]);
+    out.push(pcm); n += pcm.length;
+  }
+  const all = new Float32Array(n);
+  let o = 0, peak = 0;
+  for (const p of out) { all.set(p, o); o += p.length; }
+  for (let i = 0; i < n; i++) { const a = all[i] < 0 ? -all[i] : all[i]; if (a > peak) peak = a; }
+  if (peak > 0) { const k = .95 / peak; for (let i = 0; i < n; i++) all[i] *= k; }
+  return { pcm: all, sr, marks };
+}
+self.onmessage = async e => {
+  const m = e.data;
+  try {
+    if (m.type === 'init') { await init(m); self.postMessage({ type: 'ok', id: m.id }); }
+    else if (m.type === 'synth') {
+      const r = await synth(m);
+      if (r.need) self.postMessage({ type: 'need', id: m.id });
+      else self.postMessage({ type: 'ok', id: m.id, pcm: r.pcm, sr: r.sr, marks: r.marks }, [r.pcm.buffer]);
+    }
+  } catch (err) { self.postMessage({ type: 'err', id: m.id, msg: String(err && err.message || err) }); }
+};
+`;
+const TTS = { worker: null, ready: null, reqs: new Map(), loaded: {} };
+function ttsCall(msg, transfer, onProg) {
+  return new Promise((res, rej) => {
+    const id = uid();
+    TTS.reqs.set(id, { res, rej, onProg });
+    TTS.worker.postMessage(Object.assign({ id }, msg), transfer || []);
+  });
+}
+async function ttsPhBase() {
+  if (/^https?:$/.test(location.protocol)) {
+    try { const r = await fetch(new URL('tts/piper_phonemize.wasm', location.href).href, { method: 'HEAD' }); if (r.ok) return new URL('tts/', location.href).href; } catch (e) { /* use the CDN copy */ }
+  }
+  return TTS_PH_CDN;
+}
+function ttsEngine() {
+  if (TTS.ready) return TTS.ready;
+  TTS.ready = (async () => {
+    const url = URL.createObjectURL(new Blob([TTS_WORKER_SRC], { type: 'text/javascript' }));
+    TTS.worker = new Worker(url);
+    TTS.worker.onmessage = e => {
+      const m = e.data, r = TTS.reqs.get(m.id);
+      if (!r) return;
+      if (m.type === 'prog') { if (r.onProg) r.onProg(m.i, m.n); return; }
+      TTS.reqs.delete(m.id);
+      if (m.type === 'err') r.rej(new Error(m.msg)); else r.res(m);
+    };
+    TTS.worker.onerror = e => { for (const r of TTS.reqs.values()) r.rej(new Error(e.message || 'worker')); TTS.reqs.clear(); };
+    await ttsCall({ type: 'init', ortBases: TTS_ORT, phBase: await ttsPhBase() });
+  })();
+  TTS.ready.catch(() => { try { if (TTS.worker) TTS.worker.terminate(); } catch (e) { /* ignore */ } TTS.worker = null; TTS.ready = null; TTS.loaded = {}; });
+  return TTS.ready;
+}
+function ttsSplit(text) {
+  const t = text.replace(/\s+/g, ' ').trim();
+  if (!t) return [];
+  const parts = t.match(/[^.!?…]+[.!?…]*["»”)]*\s*/g) || [t];
+  const out = [];
+  for (let p of parts) {
+    p = p.trim();
+    if (!p) continue;
+    while (p.length > 260) {
+      let cut = p.lastIndexOf(',', 260);
+      if (cut < 60) cut = p.lastIndexOf(' ', 260);
+      if (cut < 60) cut = 260;
+      out.push(p.slice(0, cut + 1).trim());
+      p = p.slice(cut + 1).trim();
+    }
+    if (p) out.push(p);
+  }
+  return out;
+}
+// returns { blob, duration, pcm, sr }
+async function ttsSpeak(text, voice, speed, onStage) {
+  const parts = ttsSplit(text);
+  if (!parts.length) throw new Error('empty');
+  onStage('engine');
+  await ttsEngine();
+  let files = null;
+  if (!TTS.loaded[voice]) {
+    if (!(await ttsVoiceCached(voice))) onStage('download', 0);
+    files = await ttsVoiceFiles(voice, (got, total) => onStage('download', total ? got / total : 0, got));
+  } else files = { cfg: TTS.loaded[voice] };
+  const base = { type: 'synth', voice, cfg: files.cfg, parts, lengthScale: 1 / clamp(speed || 1, .5, 2), pause: .28 };
+  const prog = (i, n) => onStage('speak', i / n);
+  onStage('speak', 0);
+  let r = await ttsCall(base, null, prog);
+  if (r.type === 'need') {
+    if (!files.blob) files = await ttsVoiceFiles(voice, (got, total) => onStage('download', total ? got / total : 0, got));
+    onStage('load');
+    const model = await files.blob.arrayBuffer();
+    r = await ttsCall(Object.assign({}, base, { model }), [model], prog);
+  }
+  if (r.type !== 'ok' || !r.pcm) throw new Error('no audio');
+  TTS.loaded[voice] = files.cfg;
+  const pcm = r.pcm, sr = r.sr, n = pcm.length;
+  const buf = { numberOfChannels: 1, sampleRate: sr, length: n, duration: n / sr, getChannelData: () => pcm };
+  const lines = (r.marks || []).map(([i, t, d]) => ({ text: parts[i], t, d }));
+  return { blob: encodeWav(buf), duration: n / sr, buf, lines };
+}
+function ttsWrap(text, w) {
+  const words = text.split(' '), lines = [];
+  let cur = '';
+  for (const wd of words) {
+    if (cur && (cur + ' ' + wd).length > w) { lines.push(cur); cur = wd; }
+    else cur = cur ? cur + ' ' + wd : wd;
+  }
+  if (cur) lines.push(cur);
+  return lines.join('\n');
+}
+function ttsPrefs(v) {
+  try {
+    if (v) localStorage.setItem('narezka.tts', JSON.stringify(v));
+    else return JSON.parse(localStorage.getItem('narezka.tts') || 'null') || {};
+  } catch (e) { return {}; }
+}
+function ttsErrorText(e) {
+  const s = String(e && e.message || e);
+  if (/ort|importScripts|NetworkError|Failed to fetch|HTTP|fetch failed|Load failed|piper_phonemize/i.test(s)) return 'Не получилось скачать движок или голос. Нужен интернет — только в первый раз для каждого голоса. Если не помогает, открой «Нарезку» в Chrome по ссылке GitHub Pages.';
+  if (/memory|alloc/i.test(s)) return 'Телефону не хватило памяти. Закрой другие вкладки и попробуй ещё раз.';
+  return 'Не получилось озвучить: ' + s;
+}
+
+function openTts() {
+  const pref = ttsPrefs();
+  const st = { text: pref.text || '', voice: TTS_VOICES.some(v => v.id === pref.voice) ? pref.voice : TTS_VOICES[0].id, speed: clamp(+pref.speed || 1, .5, 2), caption: !!pref.caption, busy: false, last: null, audio: null };
+  const save = () => ttsPrefs({ text: st.text, voice: st.voice, speed: st.speed, caption: st.caption });
+  const key = () => st.voice + '|' + st.speed + '|' + st.text.trim();
+  openSheet('Текст в речь', body => {
+    const ta = el('textarea', { class: 'txtin', rows: 3, maxlength: 2000, placeholder: 'Напиши, что сказать…', 'aria-label': 'Текст для озвучки' });
+    ta.value = st.text;
+    ta.addEventListener('input', () => { st.text = ta.value; save(); });
+    const voiceHint = el('p', { class: 'hint' });
+    const showVoiceHint = async () => {
+      const ok = TTS.loaded[st.voice] || await ttsVoiceCached(st.voice);
+      voiceHint.textContent = ok ? 'Голос уже скачан — работает без интернета.' : 'Голос скачается один раз (около 60 МБ), дальше работает без интернета.';
+    };
+    const voices = chipRow(TTS_VOICES.map(v => [v.id, v.name]), st.voice, v => { st.voice = v; save(); showVoiceHint(); });
+    const sexes = el('p', { class: 'hint' }, TTS_VOICES.map(v => v.name + ' — ' + v.sub).join(', ') + '.');
+    const sp = slider({ label: 'Скорость речи', min: .5, max: 2, step: .05, value: st.speed, fmt: fmtSpeed, onInput: v => { st.speed = v; }, onChange: v => { st.speed = v; save(); } });
+    const cap = toggleRow('Субтитры по фразам', st.caption, v => { st.caption = v; save(); });
+    const status = el('p', { class: 'hint center', role: 'status' });
+    const bar = el('div', { class: 'prog', hidden: true }), barIn = el('i');
+    bar.append(barIn);
+    const bPrev = el('button', { class: 'btn' }), bAdd = el('button', { class: 'btn primary' });
+    bPrev.innerHTML = icon('play') + 'Прослушать';
+    bAdd.innerHTML = icon('plus') + 'Добавить';
+    const setBusy = b => { st.busy = b; bPrev.disabled = bAdd.disabled = b; bPrev.style.opacity = bAdd.style.opacity = b ? .5 : ''; ta.readOnly = b; };
+    const stage = (s, p, got) => {
+      bar.hidden = false;
+      if (s === 'engine') { status.textContent = 'Запускаю движок озвучки…'; barIn.style.width = '4%'; }
+      else if (s === 'download') { status.textContent = 'Скачиваю голос' + (got ? ': ' + fmtSize(got) : '…') + (p ? ' (' + Math.round(p * 100) + '%)' : ''); barIn.style.width = Math.max(4, p * 100) + '%'; }
+      else if (s === 'load') { status.textContent = 'Загружаю голос в память…'; barIn.style.width = '100%'; }
+      else if (s === 'speak') { status.textContent = 'Озвучиваю…'; barIn.style.width = Math.max(6, p * 100) + '%'; }
+    };
+    const make = async () => {
+      const text = st.text.trim();
+      if (!text) { toast('Сначала напиши текст'); ta.focus(); return null; }
+      if (st.last && st.last.key === key()) return st.last;
+      setBusy(true);
+      try {
+        const r = await ttsSpeak(text, st.voice, st.speed, stage);
+        r.key = key(); r.text = text;
+        st.last = r;
+        status.textContent = 'Готово: ' + fmtSec(r.duration);
+        return r;
+      } catch (e) {
+        console.warn('tts', e);
+        status.textContent = ttsErrorText(e);
+        return null;
+      } finally { bar.hidden = true; barIn.style.width = '0'; setBusy(false); showVoiceHint(); }
+    };
+    bPrev.addEventListener('click', async () => {
+      if (st.busy) return;
+      if (st.audio) { st.audio.pause(); st.audio = null; }
+      const r = await make();
+      if (!r || !sheetState) return;
+      if (!r.url) r.url = URL.createObjectURL(r.blob);
+      st.audio = new Audio(r.url);
+      st.audio.play().catch(() => {});
+    });
+    bAdd.addEventListener('click', async () => {
+      if (st.busy) return;
+      const r = await make();
+      if (!r || !sheetState) return;
+      if (st.audio) { st.audio.pause(); st.audio = null; }
+      const tmp = {};
+      setPeaksFromBuffer(tmp, r.buf);
+      const short = r.text.length > 28 ? r.text.slice(0, 26).trim() + '…' : r.text;
+      const m = await registerMedia(r.blob, 'audio', 'Озвучка: ' + short, null, true, { duration: r.duration, peaks: tmp.peaks, peakRate: tmp.peakRate });
+      if (!m.ok) { toast('Не получилось добавить звук'); return; }
+      const t0 = E.t, it = newAudio(m, t0, { src: 'tts', name: m.name });
+      P.items.push(it); assignLane(it);
+      if (st.caption) {
+        const lines = r.lines && r.lines.length ? r.lines : [{ text: r.text, t: 0, d: r.duration }];
+        lines.forEach((ln, k) => {
+          const next = lines[k + 1], tx = newText(t0 + ln.t);
+          tx.text = ttsWrap(ln.text, 22);
+          tx.dur = Math.max(.4, (next ? next.t : r.duration) - ln.t);
+          tx.tf.y = .78;
+          P.items.push(tx); assignLane(tx);
+        });
+      }
+      layout();
+      closeSheet(); select('item', it.id);
+      toast('Озвучка добавлена на таймлайн');
+    });
+    body.append(ta, sec('Голос'), voices, sexes, voiceHint, sp, cap, bar, status, el('div', { class: 'btns' }, bPrev, bAdd));
+    showVoiceHint();
+  }, { tall: true, onClose: () => { if (st.audio) { st.audio.pause(); st.audio = null; } } });
 }
 
 // --- voice-over (only when the page runs on its own in a browser) ---
