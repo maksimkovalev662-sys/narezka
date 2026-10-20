@@ -3414,22 +3414,126 @@ function ttsErrorText(e) {
   return 'Не получилось озвучить: ' + s;
 }
 
+// --- Fish Audio: cloud voices through the person's own API key (fish.audio) ---
+const FISH_API = 'https://api.fish.audio';
+const FISH_MODELS = [['s2.1-pro', 'S2.1 Pro'], ['s2.1-pro-free', 'S2.1 бесплатный'], ['s1', 'S1']];
+function fishKey(v) {
+  try {
+    if (v !== undefined) { if (v) localStorage.setItem('narezka.fishKey', v); else localStorage.removeItem('narezka.fishKey'); return v; }
+    return localStorage.getItem('narezka.fishKey') || '';
+  } catch (e) { return ''; }
+}
+function fishErr(status, body) {
+  const msg = body && (body.message || body.reason) ? String(body.message || body.reason) : '';
+  if (status === 401 || status === 403) return 'Fish Audio не принял ключ. Проверь API-ключ.';
+  if (status === 402) return 'На балансе Fish Audio закончились деньги — пополни его на fish.audio или выбери модель «S2.1 бесплатный».';
+  if (status === 429) return 'Слишком много запросов к Fish Audio. Подожди минуту.';
+  if (status === 503) return 'Сервер Fish Audio перегружен. Попробуй чуть позже.';
+  return 'Fish Audio ответил ошибкой ' + status + (msg ? ': ' + msg : '');
+}
+async function fishFetch(path, opts) {
+  let r;
+  try { r = await fetch(FISH_API + path, opts); }
+  catch (e) { throw new Error('FISHNET'); }
+  if (!r.ok) { let body = null; try { body = await r.json(); } catch (e) { /* not json */ } throw new Error('FISH:' + fishErr(r.status, body)); }
+  return r;
+}
+async function fishVoices(key, opts) {
+  const q = new URLSearchParams({ page_size: '24', sort_by: 'score' });
+  if (opts.self) q.set('self', 'true'); else q.set('language', 'ru');
+  if (opts.title) q.set('title', opts.title);
+  const r = await fishFetch('/model?' + q, { headers: { Authorization: 'Bearer ' + key } });
+  const j = await r.json();
+  return (j.items || []).map(x => ({ id: x._id, title: x.title || x._id }));
+}
+async function decodeForPeaks(blob) {
+  const ab = await blob.arrayBuffer();
+  const oc = new OfflineAudioContext(1, 1, 44100);
+  return await oc.decodeAudioData(ab);
+}
+async function fishSpeak(text, o, onStage) {
+  onStage('cloud');
+  const r = await fishFetch('/v1/tts', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + o.key, 'Content-Type': 'application/json', model: o.model },
+    body: JSON.stringify({ text, reference_id: o.voice || null, format: 'mp3', mp3_bitrate: 128, latency: 'normal', normalize: true, language: 'ru', prosody: { speed: clamp(o.speed || 1, .5, 2) } }),
+  });
+  const blob = new Blob([await r.arrayBuffer()], { type: 'audio/mpeg' });
+  if (blob.size < 200) throw new Error('no audio');
+  const buf = await decodeForPeaks(blob);
+  // no timing from the server: spread the phrases by their length
+  const parts = ttsSplit(text), total = parts.reduce((a, x) => a + x.length, 0) || 1;
+  let t = 0;
+  const lines = parts.map(x => { const ln = { text: x, t, d: buf.duration * x.length / total }; t += ln.d; return ln; });
+  return { blob, duration: buf.duration, buf, lines };
+}
+
 function openTts() {
   const pref = ttsPrefs();
-  const st = { text: pref.text || '', voice: TTS_VOICES.some(v => v.id === pref.voice) ? pref.voice : TTS_VOICES[0].id, speed: clamp(+pref.speed || 1, .5, 2), caption: !!pref.caption, busy: false, last: null, audio: null };
-  const save = () => ttsPrefs({ text: st.text, voice: st.voice, speed: st.speed, caption: st.caption });
-  const key = () => st.voice + '|' + st.speed + '|' + st.text.trim();
+  const st = {
+    text: pref.text || '', engine: pref.engine === 'fish' ? 'fish' : 'piper',
+    voice: TTS_VOICES.some(v => v.id === pref.voice) ? pref.voice : TTS_VOICES[0].id,
+    speed: clamp(+pref.speed || 1, .5, 2), caption: !!pref.caption,
+    fishVoice: pref.fishVoice || null, fishModel: FISH_MODELS.some(m => m[0] === pref.fishModel) ? pref.fishModel : FISH_MODELS[0][0],
+    busy: false, last: null, audio: null,
+  };
+  const save = () => ttsPrefs({ text: st.text, engine: st.engine, voice: st.voice, speed: st.speed, caption: st.caption, fishVoice: st.fishVoice, fishModel: st.fishModel });
+  const key = () => [st.engine, st.engine === 'fish' ? (st.fishVoice && st.fishVoice.id) + st.fishModel : st.voice, st.speed, st.text.trim()].join('|');
   openSheet('Текст в речь', body => {
     const ta = el('textarea', { class: 'txtin', rows: 3, maxlength: 2000, placeholder: 'Напиши, что сказать…', 'aria-label': 'Текст для озвучки' });
     ta.value = st.text;
     ta.addEventListener('input', () => { st.text = ta.value; save(); });
+
+    // Piper block
+    const piper = el('div', { class: 'col' });
     const voiceHint = el('p', { class: 'hint' });
     const showVoiceHint = async () => {
       const ok = TTS.loaded[st.voice] || await ttsVoiceCached(st.voice);
       voiceHint.textContent = ok ? 'Голос уже скачан — работает без интернета.' : 'Голос скачается один раз (около 60 МБ), дальше работает без интернета.';
     };
     const voices = chipRow(TTS_VOICES.map(v => [v.id, v.name]), st.voice, v => { st.voice = v; save(); showVoiceHint(); });
-    const sexes = el('p', { class: 'hint' }, TTS_VOICES.map(v => v.name + ' — ' + v.sub).join(', ') + '.');
+    piper.append(sec('Голос'), voices, el('p', { class: 'hint' }, TTS_VOICES.map(v => v.name + ' — ' + v.sub).join(', ') + '.'), voiceHint);
+
+    // Fish Audio block
+    const fish = el('div', { class: 'col' });
+    const keyIn = el('input', { class: 'field', type: 'password', autocomplete: 'off', spellcheck: 'false', placeholder: 'API-ключ с fish.audio', 'aria-label': 'API-ключ Fish Audio' });
+    keyIn.value = fishKey();
+    keyIn.addEventListener('change', () => { fishKey(keyIn.value.trim()); loadList(); });
+    const cur = el('p', { class: 'hint' });
+    const showCur = () => { cur.textContent = st.fishVoice ? 'Выбран голос: ' + st.fishVoice.title : 'Голос не выбран — будет голос Fish Audio по умолчанию.'; };
+    const list = el('div', { class: 'chips' });
+    const listHint = el('p', { class: 'hint' });
+    let listSelf = false;
+    const drawList = items => {
+      list.innerHTML = '';
+      for (const v of items) list.append(el('button', { class: 'chipbtn' + (st.fishVoice && st.fishVoice.id === v.id ? ' on' : ''), onclick: () => { st.fishVoice = v; save(); showCur(); drawList(items); } }, v.title.length > 26 ? v.title.slice(0, 24) + '…' : v.title));
+    };
+    const search = el('input', { class: 'field', type: 'search', placeholder: 'Поиск голоса по названию', 'aria-label': 'Поиск голоса' });
+    let sTimer = 0;
+    search.addEventListener('input', () => { clearTimeout(sTimer); sTimer = setTimeout(loadList, 500); });
+    const loadList = async () => {
+      const k = fishKey();
+      if (!k) { list.innerHTML = ''; listHint.textContent = 'Вставь ключ, чтобы увидеть голоса.'; return; }
+      listHint.textContent = 'Загружаю голоса…';
+      try {
+        const items = await fishVoices(k, { self: listSelf, title: search.value.trim() });
+        drawList(items);
+        listHint.textContent = items.length ? '' : (listSelf ? 'У тебя пока нет своих голосов.' : 'Ничего не нашлось.');
+      } catch (e) { list.innerHTML = ''; listHint.textContent = fishText(e); }
+    };
+    const idIn = el('input', { class: 'field', type: 'text', autocomplete: 'off', spellcheck: 'false', placeholder: 'или ID голоса с сайта', 'aria-label': 'ID голоса Fish Audio' });
+    idIn.addEventListener('change', () => { const v = idIn.value.trim(); if (v) { st.fishVoice = { id: v, title: v }; save(); showCur(); } });
+    fish.append(
+      sec('Ключ'), keyIn,
+      el('p', { class: 'hint' }, 'Ключ хранится только в этом браузере. Озвучка идёт через сервер Fish Audio и списывается с твоего баланса.'),
+      sec('Модель'), chipRow(FISH_MODELS, st.fishModel, v => { st.fishModel = v; save(); }),
+      sec('Голос'), tabsEl(['Русские', 'Мои голоса'], 0, i => { listSelf = i === 1; loadList(); }), search, list, listHint, idIn, cur,
+    );
+    showCur();
+
+    const showEngine = () => { piper.hidden = st.engine !== 'piper'; fish.hidden = st.engine !== 'fish'; if (st.engine === 'fish' && !list.childElementCount) loadList(); };
+    const eng = tabsEl(['На телефоне', 'Fish Audio'], st.engine === 'fish' ? 1 : 0, i => { st.engine = i ? 'fish' : 'piper'; save(); showEngine(); });
+
     const sp = slider({ label: 'Скорость речи', min: .5, max: 2, step: .05, value: st.speed, fmt: fmtSpeed, onInput: v => { st.speed = v; }, onChange: v => { st.speed = v; save(); } });
     const cap = toggleRow('Субтитры по фразам', st.caption, v => { st.caption = v; save(); });
     const status = el('p', { class: 'hint center', role: 'status' });
@@ -3445,23 +3549,27 @@ function openTts() {
       else if (s === 'download') { status.textContent = 'Скачиваю голос' + (got ? ': ' + fmtSize(got) : '…') + (p ? ' (' + Math.round(p * 100) + '%)' : ''); barIn.style.width = Math.max(4, p * 100) + '%'; }
       else if (s === 'load') { status.textContent = 'Загружаю голос в память…'; barIn.style.width = '100%'; }
       else if (s === 'speak') { status.textContent = 'Озвучиваю…'; barIn.style.width = Math.max(6, p * 100) + '%'; }
+      else if (s === 'cloud') { status.textContent = 'Fish Audio озвучивает…'; barIn.style.width = '50%'; }
     };
     const make = async () => {
       const text = st.text.trim();
       if (!text) { toast('Сначала напиши текст'); ta.focus(); return null; }
+      if (st.engine === 'fish' && !fishKey()) { toast('Вставь API-ключ Fish Audio'); keyIn.focus(); return null; }
       if (st.last && st.last.key === key()) return st.last;
       setBusy(true);
       try {
-        const r = await ttsSpeak(text, st.voice, st.speed, stage);
+        const r = st.engine === 'fish'
+          ? await fishSpeak(text, { key: fishKey(), voice: st.fishVoice && st.fishVoice.id, model: st.fishModel, speed: st.speed }, stage)
+          : await ttsSpeak(text, st.voice, st.speed, stage);
         r.key = key(); r.text = text;
         st.last = r;
         status.textContent = 'Готово: ' + fmtSec(r.duration);
         return r;
       } catch (e) {
         console.warn('tts', e);
-        status.textContent = ttsErrorText(e);
+        status.textContent = st.engine === 'fish' ? fishText(e) : ttsErrorText(e);
         return null;
-      } finally { bar.hidden = true; barIn.style.width = '0'; setBusy(false); showVoiceHint(); }
+      } finally { bar.hidden = true; barIn.style.width = '0'; setBusy(false); if (st.engine === 'piper') showVoiceHint(); }
     };
     bPrev.addEventListener('click', async () => {
       if (st.busy) return;
@@ -3498,9 +3606,17 @@ function openTts() {
       closeSheet(); select('item', it.id);
       toast('Озвучка добавлена на таймлайн');
     });
-    body.append(ta, sec('Голос'), voices, sexes, voiceHint, sp, cap, bar, status, el('div', { class: 'btns' }, bPrev, bAdd));
+    body.append(eng, ta, piper, fish, sp, cap, bar, status, el('div', { class: 'btns' }, bPrev, bAdd));
+    showEngine();
     showVoiceHint();
   }, { tall: true, onClose: () => { if (st.audio) { st.audio.pause(); st.audio = null; } } });
+}
+function fishText(e) {
+  const s = String(e && e.message || e);
+  if (s.startsWith('FISH:')) return s.slice(5);
+  if (s === 'FISHNET') return 'Не удалось связаться с Fish Audio. Нет интернета, или их сервер не разрешает запросы со страницы — тогда этот вариант сработает только в приложении.';
+  if (/decode/i.test(s)) return 'Fish Audio прислал звук, который браузер не смог прочитать.';
+  return 'Не получилось озвучить: ' + s;
 }
 
 // --- voice-over (only when the page runs on its own in a browser) ---

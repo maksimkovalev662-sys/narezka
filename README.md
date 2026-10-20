@@ -27,6 +27,8 @@
 - **Фонемизатор** — espeak-ng, собранный в WebAssembly ([diffusionstudio/piper-wasm](https://github.com/diffusionstudio/piper-wasm)), лежит в папке `tts/`.
 - **Нейросеть** запускается через [onnxruntime-web](https://github.com/microsoft/onnxruntime) с CDN.
 
+Второй вариант — **Fish Audio** ([fish.audio](https://fish.audio)): озвучка через их облако твоим API-ключом. Ключ вводится в редакторе и хранится только в браузере, в репозиторий он не попадает. Можно выбрать русский голос из их библиотеки, свои голоса или вставить ID голоса. Платно по их тарифам, нужен интернет.
+
 Для первой загрузки голоса нужен интернет. Лучше всего открывать через GitHub Pages: тогда файлы из `tts/` берутся из этого репозитория.
 
 Лицензии: Piper и piper-wasm — MIT, espeak-ng — GPL-3.0, условия каждого голоса — в его `MODEL_CARD` в [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices).
