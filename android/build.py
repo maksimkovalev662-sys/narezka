@@ -13,8 +13,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
 PACKAGE = 'com.foptop.narezka'
-VERSION_CODE = 2
-VERSION_NAME = '1.1'
+VERSION_CODE = 3
+VERSION_NAME = '1.2'
 MIN_SDK, TARGET_SDK = 24, 33
 
 ANDROID_NS = 'http://schemas.android.com/apk/res/android'

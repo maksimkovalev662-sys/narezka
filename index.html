@@ -147,7 +147,7 @@ input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; backgroun
 input[type=range]::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--signal); }
 input[type=range]::-moz-range-thumb { width: 22px; height: 22px; border: 0; border-radius: 50%; background: #fff; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.chips.scroll { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-inline: -4px; padding-inline: 4px; }
+.chips.scroll { flex: none; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-inline: -4px; padding-inline: 4px; }
 .chips.scroll::-webkit-scrollbar { display: none; }
 .chipbtn { flex: none; height: 34px; padding: 0 14px; border-radius: 17px; background: var(--raise); color: var(--text); font-size: 13px; font-weight: 500; position: relative; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .chipbtn.on { background: var(--signal); color: var(--signal-ink); }
@@ -697,14 +697,138 @@ const SFX_DEF = {
   beep: { name: 'Бип', dur: .6, build(c) { const o = c.createOscillator(); o.frequency.value = 1000; const g = c.createGain(); g.gain.setValueAtTime(0, 0); g.gain.linearRampToValueAtTime(.45, .01); g.gain.setValueAtTime(.45, .57); g.gain.linearRampToValueAtTime(0, .6); o.connect(g).connect(c.destination); o.start(0); o.stop(.6); } },
   tada: { name: 'Тадам', dur: 1.7, build(c) { const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 2600; f.connect(c.destination); const note = (fq, t0, t1, a) => { const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.value = fq; const g = c.createGain(); g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(a, t0 + .02); g.gain.setValueAtTime(a, t1 - .15); g.gain.linearRampToValueAtTime(0, t1); o.connect(g).connect(f); o.start(t0); o.stop(t1); }; note(523.25, 0, .16, .12); note(659.25, .14, .3, .12); [523.25, 659.25, 783.99, 1046.5].forEach(fq => note(fq, .3, 1.65, .08)); } },
 };
+// --- more sound effects, grouped like a phone editor's library; all synthesized here ---
+const SX = {
+  env(g, t, a, att, dec, hold) {
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(a, t + att);
+    if (hold) { g.gain.setValueAtTime(a, t + Math.max(att, dec - .3)); g.gain.linearRampToValueAtTime(0, t + att + dec); }
+    else g.gain.exponentialRampToValueAtTime(.0008, t + att + Math.max(.005, dec));
+  },
+  tone(c, o) {
+    const t = o.t || 0, d = o.d, att = o.att ?? .005, osc = c.createOscillator();
+    osc.type = o.type || 'sine';
+    osc.frequency.setValueAtTime(o.f, t);
+    if (o.f1) {
+      if (o.lin) osc.frequency.linearRampToValueAtTime(o.f1, t + (o.sweep || d));
+      else osc.frequency.exponentialRampToValueAtTime(o.f1, t + (o.sweep || d));
+    }
+    if (o.vib) { const l = c.createOscillator(), lg = c.createGain(); l.frequency.value = o.vib[0]; lg.gain.value = o.vib[1]; l.connect(lg).connect(osc.frequency); l.start(t); l.stop(t + d + .02); }
+    const g = c.createGain();
+    SX.env(g, t, o.a ?? .5, att, d - att, o.hold);
+    let n = osc;
+    if (o.flt) { const f = c.createBiquadFilter(); f.type = o.flt[0]; f.frequency.value = o.flt[1]; f.Q.value = o.flt[2] || 1; n.connect(f); n = f; }
+    n.connect(g).connect(o.dest || c.destination);
+    osc.start(t); osc.stop(t + d + .02);
+  },
+  noise(c, o) {
+    const t = o.t || 0, att = o.att ?? .003, s = c.createBufferSource();
+    s.buffer = noiseBuf(c, o.d + .05);
+    const f = c.createBiquadFilter();
+    f.type = o.type || 'lowpass'; f.Q.value = o.q || 1;
+    f.frequency.setValueAtTime(o.f || 2000, t);
+    if (o.f1) f.frequency.exponentialRampToValueAtTime(o.f1, t + o.d);
+    const g = c.createGain();
+    if (o.rev) { g.gain.setValueAtTime(.0008, t); g.gain.exponentialRampToValueAtTime(o.a ?? .5, t + o.d); g.gain.setValueAtTime(0, t + o.d + .002); }
+    else SX.env(g, t, o.a ?? .5, att, o.d - att, o.hold);
+    s.connect(f).connect(g).connect(o.dest || c.destination);
+    s.start(t); s.stop(t + o.d + .05);
+  },
+  dist(c, k, a) {
+    const sh = c.createWaveShaper(), n = 1024, cv = new Float32Array(n);
+    for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1; cv[i] = Math.tanh(k * x) / Math.tanh(k); }
+    sh.curve = cv;
+    const g = c.createGain(); g.gain.value = a;
+    sh.connect(g).connect(c.destination);
+    return sh;
+  },
+};
+const SFX_CATS = [['pop', 'Популярное'], ['trans', 'Переходы'], ['meme', 'Мемы'], ['hit', 'Удары'], ['ui', 'Интерфейс'], ['magic', 'Магия'], ['cartoon', 'Мультики'], ['amb', 'Атмосфера'], ['horror', 'Хоррор']];
+const SFX_POPULAR = ['whoosh', 'deepBoom', 'rimshot', 'fail', 'boing', 'ding', 'pop', 'glitch', 'riser', 'impact', 'shutter', 'beep', 'crickets', 'dundun', 'tada', 'punch', 'notify', 'magic'];
+(() => {
+  const T = SX.tone, N = SX.noise;
+  Object.assign(SFX_DEF.whoosh, { cat: 'trans' }); Object.assign(SFX_DEF.boom, { cat: 'hit' }); Object.assign(SFX_DEF.ding, { cat: 'ui' });
+  Object.assign(SFX_DEF.pop, { cat: 'ui' }); Object.assign(SFX_DEF.laser, { cat: 'cartoon' }); Object.assign(SFX_DEF.click, { cat: 'ui' });
+  Object.assign(SFX_DEF.rise, { cat: 'trans' }); Object.assign(SFX_DEF.kick, { cat: 'hit' }); Object.assign(SFX_DEF.beep, { cat: 'meme', name: 'Бип (цензура)' });
+  Object.assign(SFX_DEF.tada, { cat: 'magic' });
+  Object.assign(SFX_DEF, {
+    // transitions
+    swoosh2: { name: 'Свист', cat: 'trans', dur: .45, build(c) { N(c, { d: .4, type: 'bandpass', f: 500, f1: 6000, q: 1.2, a: .9, att: .18 }); } },
+    swooshRev: { name: 'Вжух назад', cat: 'trans', dur: .9, build(c) { N(c, { d: .85, type: 'bandpass', f: 5000, f1: 400, q: 1, a: .9, rev: true }); } },
+    swipe: { name: 'Свайп', cat: 'trans', dur: .25, build(c) { N(c, { d: .22, type: 'highpass', f: 2500, f1: 7000, a: .6, att: .06 }); } },
+    riser: { name: 'Нарастание', cat: 'trans', dur: 3, build(c) { N(c, { d: 2.9, type: 'bandpass', f: 300, f1: 8000, q: 2, a: .6, rev: true }); T(c, { type: 'sawtooth', f: 110, f1: 880, d: 2.9, a: .12, att: 2.7, flt: ['lowpass', 1800] }); } },
+    downer: { name: 'Спад', cat: 'trans', dur: 2, build(c) { T(c, { type: 'sawtooth', f: 900, f1: 60, d: 1.9, a: .25, flt: ['lowpass', 1500] }); N(c, { d: 1.9, type: 'bandpass', f: 6000, f1: 200, q: 1.5, a: .5 }); } },
+    glitch: { name: 'Глитч', cat: 'trans', dur: .6, build(c) { for (let i = 0; i < 9; i++) { const t = i * .06; T(c, { type: 'square', f: 200 + hash(i * 3.1) * 2400, d: .045, t, a: .18, att: .001 }); if (i % 2) N(c, { t, d: .04, type: 'highpass', f: 3000, a: .35 }); } } },
+    tapeStop: { name: 'Стоп плёнки', cat: 'trans', dur: 1.1, build(c) { T(c, { type: 'sawtooth', f: 440, f1: 30, d: 1, a: .3, flt: ['lowpass', 2200] }); T(c, { type: 'sawtooth', f: 660, f1: 45, d: 1, a: .15, flt: ['lowpass', 2200] }); } },
+    shutter: { name: 'Затвор камеры', cat: 'trans', dur: .35, build(c) { N(c, { d: .04, type: 'highpass', f: 2500, a: .9 }); N(c, { t: .09, d: .08, type: 'bandpass', f: 1800, q: 2, a: .7 }); T(c, { t: .09, f: 180, f1: 90, d: .06, a: .4 }); } },
+    zoom: { name: 'Зум', cat: 'trans', dur: .7, build(c) { N(c, { d: .6, type: 'bandpass', f: 400, f1: 3000, q: 3, a: .7, att: .35 }); T(c, { f: 200, f1: 1200, d: .6, a: .15, att: .4 }); } },
+    // memes and comedy
+    boing: { name: 'Боинг', cat: 'meme', dur: .9, build(c) { T(c, { f: 180, f1: 520, d: .85, a: .5, vib: [14, 60], sweep: .5 }); } },
+    slideUp: { name: 'Свисток вверх', cat: 'meme', dur: .9, build(c) { T(c, { f: 500, f1: 2100, d: .85, a: .35, att: .03, vib: [7, 12] }); } },
+    slideDown: { name: 'Свисток вниз', cat: 'meme', dur: .9, build(c) { T(c, { f: 2100, f1: 450, d: .85, a: .35, att: .03, vib: [7, 12] }); } },
+    fail: { name: 'Провал', cat: 'meme', dur: 2.6, build(c) { [[392, 0, .42], [370, .45, .42], [349, .9, .42], [330, 1.35, 1.2]].forEach(([f, t, d], i) => T(c, { type: 'sawtooth', f, t, d, a: .28, att: .04, flt: ['lowpass', 900, 2], vib: i === 3 ? [5, 9] : null })); } },
+    rimshot: { name: 'Ба-дум-тсс', cat: 'meme', dur: 1.6, build(c) { const sn = t => { N(c, { t, d: .18, type: 'bandpass', f: 1800, q: .8, a: .7 }); T(c, { t, f: 220, f1: 160, d: .1, a: .4 }); }; sn(0); T(c, { t: .2, f: 120, f1: 45, d: .3, a: .9 }); sn(.42); N(c, { t: .42, d: 1.1, type: 'highpass', f: 6000, a: .45 }); } },
+    honk: { name: 'Клаксон', cat: 'meme', dur: .9, build(c) { [0, .42].forEach(t => { T(c, { type: 'square', f: 415, d: .32, t, a: .16, att: .01, flt: ['lowpass', 1600], hold: true }); T(c, { type: 'square', f: 440, d: .32, t, a: .16, att: .01, flt: ['lowpass', 1600], hold: true }); }); } },
+    scratch: { name: 'Скретч', cat: 'meme', dur: .6, build(c) { const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(150, 0); [.12, .2, .32, .4, .55].forEach((t, i) => o.frequency.linearRampToValueAtTime(i % 2 ? 150 : 900, t)); const f = c.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1200; f.Q.value = .7; const g = c.createGain(); g.gain.setValueAtTime(.35, 0); g.gain.linearRampToValueAtTime(0, .58); o.connect(f).connect(g).connect(c.destination); o.start(0); o.stop(.58); N(c, { d: .55, type: 'bandpass', f: 2500, q: 1, a: .25 }); } },
+    deepBoom: { name: 'Мем-бум', cat: 'meme', dur: 2.2, build(c) { const sh = SX.dist(c, 30, .8); T(c, { f: 75, f1: 40, d: 2.1, a: 1, att: .004, dest: sh }); T(c, { f: 150, f1: 80, d: .5, a: .5, att: .004, dest: sh }); } },
+    bonk: { name: 'Бонк', cat: 'meme', dur: .5, build(c) { T(c, { f: 880, f1: 620, d: .35, a: .6, att: .001 }); T(c, { f: 1320, d: .15, a: .25, att: .001 }); N(c, { d: .03, type: 'bandpass', f: 2000, a: .6 }); } },
+    crickets: { name: 'Сверчки', cat: 'meme', dur: 2.4, build(c) { for (let k = 0; k < 4; k++) for (let i = 0; i < 3; i++) T(c, { f: 4400, t: k * .6 + i * .06, d: .04, a: .12 }); } },
+    dundun: { name: 'Дун-дун-дуун', cat: 'meme', dur: 2.6, build(c) { const ch = (t, d, b) => [b, b * 1.19, b * 1.5].forEach(f => T(c, { type: 'sawtooth', f, t, d, a: .12, att: .02, flt: ['lowpass', 1200] })); ch(0, .35, 196); ch(.45, .35, 185); ch(.9, 1.6, 174.6); } },
+    // hits
+    punch: { name: 'Удар', cat: 'hit', dur: .4, build(c) { T(c, { f: 140, f1: 50, d: .25, a: .9, att: .002 }); N(c, { d: .12, type: 'lowpass', f: 3000, f1: 400, a: .8 }); } },
+    slap: { name: 'Шлепок', cat: 'hit', dur: .25, build(c) { N(c, { d: .12, type: 'highpass', f: 1200, a: 1, att: .001 }); N(c, { d: .2, type: 'bandpass', f: 900, q: 1.5, a: .4 }); } },
+    impact: { name: 'Импакт', cat: 'hit', dur: 2.5, build(c) { T(c, { f: 90, f1: 30, d: 2.3, a: 1, att: .003 }); N(c, { d: 2.2, type: 'lowpass', f: 6000, f1: 300, a: .6 }); N(c, { d: .05, type: 'highpass', f: 2000, a: .8 }); } },
+    explosion: { name: 'Взрыв', cat: 'hit', dur: 3, build(c) { const sh = SX.dist(c, 8, .9); N(c, { d: 2.9, type: 'lowpass', f: 1800, f1: 120, a: 1, att: .01, dest: sh }); T(c, { f: 60, f1: 25, d: 2, a: .8, dest: sh }); } },
+    glass: { name: 'Стекло', cat: 'hit', dur: 1.6, build(c) { N(c, { d: .4, type: 'highpass', f: 4000, a: .6 }); for (let i = 0; i < 10; i++) T(c, { f: 2500 + hash(i * 7.3) * 4500, t: hash(i * 1.7) * .25, d: .3 + hash(i) * 1, a: .07, att: .001 }); } },
+    thud: { name: 'Глухой стук', cat: 'hit', dur: .5, build(c) { T(c, { f: 100, f1: 45, d: .4, a: .9, att: .002 }); N(c, { d: .08, type: 'lowpass', f: 600, a: .6 }); } },
+    sword: { name: 'Меч', cat: 'hit', dur: 1.8, build(c) { [1, 2.76, 5.4, 8.9].forEach((k, i) => T(c, { f: 820 * k, d: 1.7 - i * .3, a: .2 / (i + 1), att: .001 })); N(c, { d: .06, type: 'highpass', f: 3000, a: .7 }); } },
+    // interface
+    notify: { name: 'Уведомление', cat: 'ui', dur: .7, build(c) { T(c, { f: 880, d: .25, a: .35 }); T(c, { f: 1320, t: .12, d: .5, a: .35 }); } },
+    message: { name: 'Сообщение', cat: 'ui', dur: .3, build(c) { T(c, { f: 600, f1: 1400, d: .12, a: .5, att: .002, sweep: .05 }); T(c, { f: 1400, t: .08, d: .18, a: .2 }); } },
+    error: { name: 'Ошибка', cat: 'ui', dur: .6, build(c) { T(c, { type: 'square', f: 220, d: .18, a: .18, flt: ['lowpass', 1500], hold: true }); T(c, { type: 'square', f: 180, t: .22, d: .3, a: .18, flt: ['lowpass', 1500], hold: true }); } },
+    success: { name: 'Успех', cat: 'ui', dur: 1, build(c) { [523.3, 659.3, 784, 1046.5].forEach((f, i) => T(c, { f, t: i * .08, d: .6, a: .22, type: 'triangle' })); } },
+    coin: { name: 'Монетка', cat: 'ui', dur: .6, build(c) { T(c, { type: 'square', f: 988, d: .08, a: .15, hold: true }); T(c, { type: 'square', f: 1319, t: .08, d: .45, a: .15 }); } },
+    typing: { name: 'Печать', cat: 'ui', dur: 1.4, build(c) { for (let i = 0; i < 14; i++) N(c, { t: i * .09 + hash(i) * .04, d: .025, type: 'bandpass', f: 2500 + hash(i * 2) * 2000, q: 2, a: .6 }); } },
+    lock: { name: 'Блокировка', cat: 'ui', dur: .15, build(c) { N(c, { d: .02, type: 'bandpass', f: 3500, q: 3, a: .9 }); N(c, { t: .05, d: .03, type: 'bandpass', f: 1800, q: 3, a: .7 }); } },
+    like: { name: 'Лайк', cat: 'ui', dur: .6, build(c) { T(c, { f: 400, f1: 900, d: .08, a: .5, sweep: .06 }); T(c, { f: 1760, t: .07, d: .45, a: .15, type: 'triangle' }); } },
+    // magic
+    sparkle: { name: 'Блёстки', cat: 'magic', dur: 1.6, build(c) { for (let i = 0; i < 16; i++) T(c, { f: 2000 + hash(i * 5.1) * 5000, t: hash(i * 3.3), d: .3, a: .08, att: .002, type: 'triangle' }); } },
+    magic: { name: 'Волшебство', cat: 'magic', dur: 2, build(c) { [523, 659, 784, 988, 1175, 1319, 1568, 1976].forEach((f, i) => T(c, { f, t: i * .07, d: 1.2, a: .1, type: 'triangle' })); N(c, { d: 1.6, type: 'highpass', f: 7000, a: .12, att: .4 }); } },
+    teleport: { name: 'Телепорт', cat: 'magic', dur: 1, build(c) { T(c, { f: 300, f1: 3000, d: .9, a: .25, vib: [30, 200], att: .02 }); } },
+    powerup: { name: 'Усиление', cat: 'magic', dur: .9, build(c) { for (let i = 0; i < 8; i++) T(c, { type: 'square', f: 262 * Math.pow(2, i / 4), t: i * .07, d: .12, a: .12 }); } },
+    levelup: { name: 'Новый уровень', cat: 'magic', dur: 1.4, build(c) { [[523, 0], [659, .1], [784, .2], [1046, .3]].forEach(([f, t]) => T(c, { type: 'square', f, t, d: t === .3 ? .9 : .12, a: .13, flt: ['lowpass', 3000] })); } },
+    // cartoon
+    run: { name: 'Бег', cat: 'cartoon', dur: 1.2, build(c) { for (let i = 0; i < 12; i++) T(c, { f: i % 2 ? 700 : 900, t: i * .09, d: .06, a: .4, att: .001 }); } },
+    jump: { name: 'Прыжок', cat: 'cartoon', dur: .4, build(c) { T(c, { type: 'square', f: 250, f1: 900, d: .3, a: .15, sweep: .25, flt: ['lowpass', 2500] }); } },
+    fall: { name: 'Падение', cat: 'cartoon', dur: 2.2, build(c) { T(c, { f: 2200, f1: 300, d: 1.7, a: .25, att: .02, sweep: 1.6, hold: true }); T(c, { t: 1.75, f: 110, f1: 45, d: .4, a: .9 }); N(c, { t: 1.75, d: .15, type: 'lowpass', f: 800, a: .6 }); } },
+    bubble: { name: 'Бульк', cat: 'cartoon', dur: .3, build(c) { T(c, { f: 300, f1: 1200, d: .15, a: .5, att: .002, sweep: .1 }); } },
+    squeak: { name: 'Писк', cat: 'cartoon', dur: .35, build(c) { T(c, { f: 1800, f1: 2600, d: .3, a: .2, vib: [25, 120] }); } },
+    zip: { name: 'Вжик', cat: 'cartoon', dur: .4, build(c) { for (let i = 0; i < 14; i++) N(c, { t: i * .022, d: .015, type: 'bandpass', f: 3000 + i * 150, q: 4, a: .5 }); } },
+    // atmosphere
+    heartbeat: { name: 'Сердцебиение', cat: 'amb', dur: 2.4, build(c) { [0, 1.1].forEach(t => { T(c, { t, f: 70, f1: 45, d: .15, a: 1 }); T(c, { t: t + .22, f: 60, f1: 40, d: .18, a: .8 }); }); } },
+    clock: { name: 'Тиканье', cat: 'amb', dur: 4, build(c) { for (let i = 0; i < 4; i++) N(c, { t: i, d: .025, type: 'bandpass', f: i % 2 ? 3200 : 2600, q: 6, a: .9 }); } },
+    wind: { name: 'Ветер', cat: 'amb', dur: 4, build(c) { const s = c.createBufferSource(); s.buffer = noiseBuf(c, 4); const f = c.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 3; f.frequency.setValueAtTime(500, 0); [1, 2, 3, 4].forEach((t, i) => f.frequency.linearRampToValueAtTime(400 + hash(i * 9) * 900, t)); const g = c.createGain(); g.gain.setValueAtTime(0, 0); g.gain.linearRampToValueAtTime(.5, 1); g.gain.linearRampToValueAtTime(.35, 3); g.gain.linearRampToValueAtTime(0, 4); s.connect(f).connect(g).connect(c.destination); s.start(0); } },
+    rain: { name: 'Дождь', cat: 'amb', dur: 4, build(c) { N(c, { d: 3.95, type: 'highpass', f: 1500, a: .25, att: .5, hold: true }); for (let i = 0; i < 60; i++) N(c, { t: hash(i * 1.3) * 3.8, d: .01, type: 'bandpass', f: 3000 + hash(i) * 4000, q: 3, a: .25 }); } },
+    applause: { name: 'Аплодисменты', cat: 'amb', dur: 3.5, build(c) { for (let i = 0; i < 140; i++) { const t = hash(i * 2.7) * 3; N(c, { t, d: .03, type: 'bandpass', f: 1000 + hash(i * 4.1) * 1800, q: 1.2, a: .25 * (t < 2.5 ? 1 : Math.max(.05, (3 - t) / .5)) }); } } },
+    drumroll: { name: 'Барабанная дробь', cat: 'amb', dur: 2.6, build(c) { for (let i = 0; i < 40; i++) N(c, { t: i * .05, d: .06, type: 'bandpass', f: 1600, q: .8, a: .15 + i / 40 * .3 }); N(c, { t: 2.05, d: .5, type: 'highpass', f: 5000, a: .5 }); T(c, { t: 2.05, f: 120, f1: 50, d: .4, a: .9 }); } },
+    // horror
+    drone: { name: 'Гул', cat: 'horror', dur: 4, build(c) { [55, 58.3, 82.4].forEach(f => T(c, { type: 'sawtooth', f, d: 3.9, a: .12, att: 1.5, flt: ['lowpass', 400], hold: true })); } },
+    sting: { name: 'Скример', cat: 'horror', dur: 2, build(c) { [440, 466, 494, 523, 554].forEach(f => T(c, { type: 'sawtooth', f, d: 1.8, a: .12, att: .01, flt: ['highpass', 300] })); N(c, { d: 1, type: 'highpass', f: 2000, a: .6 }); } },
+    creak: { name: 'Скрип двери', cat: 'horror', dur: 2, build(c) { const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(90, 0); [.4, .8, 1.2, 1.6, 1.9].forEach((t, i) => o.frequency.linearRampToValueAtTime(70 + hash(i) * 120, t)); const f = c.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 900; f.Q.value = 4; const g = c.createGain(); g.gain.setValueAtTime(0, 0); g.gain.linearRampToValueAtTime(.4, .2); g.gain.linearRampToValueAtTime(0, 1.95); o.connect(f).connect(g).connect(c.destination); o.start(0); o.stop(2); } },
+  });
+})();
 const sfxBufs = {};
 async function renderSfx(id) {
   if (sfxBufs[id]) return sfxBufs[id];
   const def = SFX_DEF[id], sr = 44100;
   const oc = new OfflineAudioContext(1, Math.ceil(def.dur * sr), sr);
   def.build(oc);
-  sfxBufs[id] = await oc.startRendering();
-  return sfxBufs[id];
+  const buf = await oc.startRendering(), d = buf.getChannelData(0);
+  let pk = 0;
+  for (let i = 0; i < d.length; i++) { const v = d[i] < 0 ? -d[i] : d[i]; if (v > pk) pk = v; }
+  if (pk > 0) { const k = .9 / pk; for (let i = 0; i < d.length; i++) d[i] *= k; }
+  sfxBufs[id] = buf;
+  return buf;
 }
 function encodeWav(buf) {
   const ch = buf.getChannelData(0), sr = buf.sampleRate, n = ch.length;
@@ -2985,16 +3109,26 @@ function openEffects(target) {
     }
   }, { onClose: () => setTimeout(toolsRender, 0) });
 }
+let sfxCat = 'pop';
 function openSfx() {
   openSheet('Звуки', body => {
-    body.append(el('p', { class: 'hint' }, 'Звук встанет на позицию курсора. Все звуки синтезируются прямо на устройстве.'));
     const list = el('div', { class: 'list' });
-    for (const [id, def] of Object.entries(SFX_DEF)) {
-      const prev = el('button', { class: 'iconbtn sm', 'aria-label': 'Прослушать «' + def.name + '»', html: icon('play'), onclick: () => previewSfx(id) });
-      list.append(el('div', { class: 'lrow' }, prev, el('div', { class: 'lname' }, el('b', null, def.name), el('span', null, fmtSec(def.dur))), el('button', { class: 'chipbtn', onclick: () => addSfx(id) }, '+ Добавить')));
-    }
-    body.append(list);
-  });
+    const draw = () => {
+      list.innerHTML = '';
+      const ids = sfxCat === 'pop' ? SFX_POPULAR.filter(id => SFX_DEF[id]) : Object.keys(SFX_DEF).filter(id => SFX_DEF[id].cat === sfxCat);
+      for (const id of ids) {
+        const def = SFX_DEF[id];
+        const prev = el('button', { class: 'iconbtn sm', 'aria-label': 'Прослушать «' + def.name + '»', html: icon('play'), onclick: () => previewSfx(id) });
+        list.append(el('div', { class: 'lrow' }, prev, el('div', { class: 'lname' }, el('b', null, def.name), el('span', null, fmtSec(def.dur))), el('button', { class: 'chipbtn', onclick: () => addSfx(id) }, '+ Добавить')));
+      }
+    };
+    body.append(
+      el('p', { class: 'hint' }, 'Звук встанет на позицию курсора. Все ' + Object.keys(SFX_DEF).length + ' звуков синтезируются прямо на устройстве.'),
+      chipRow(SFX_CATS, sfxCat, v => { sfxCat = v; draw(); }, 'scroll'),
+      list,
+    );
+    draw();
+  }, { tall: true });
 }
 async function previewSfx(id) {
   ensureAudio();
