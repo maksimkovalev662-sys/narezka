@@ -461,6 +461,7 @@ const ICONS = {
   rec: '<circle class="f" cx="12" cy="12" r="7"/>',
   stop: '<rect class="f" x="7" y="7" width="10" height="10" rx="2"/>',
   share: '<circle cx="18" cy="5.5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="18.5" r="2.5"/><path d="M8.3 10.8l7.4-4.1M8.3 13.2l7.4 4.1"/>',
+  cc: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10.5 10.3a2.1 2.1 0 1 0 0 3.4M16.5 10.3a2.1 2.1 0 1 0 0 3.4"/>',
   speak: '<path d="M4 5.5h11a1.5 1.5 0 0 1 1.5 1.5v6.5a1.5 1.5 0 0 1-1.5 1.5H9l-4 3.5V15H4a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 4 5.5z"/><path d="M6.5 9h6M6.5 11.5h4"/><path d="M19 8.5a4 4 0 0 1 0 5.5"/><path d="M21.2 6.5a7 7 0 0 1 0 9.5"/>',
   save: '<path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19.5h14"/>',
 };
@@ -2563,6 +2564,7 @@ function rootTools() {
     ['edit', 'Монтаж', 'scissors', () => { const c = clipAtPlayhead(); if (c) select('clip', c.id); else openAddMedia('main'); }],
     ['audio', 'Аудио', 'music', () => { SUB = 'audio'; toolsRender(); }],
     ['text', 'Текст', 'text', () => addText()],
+    ['subs', 'Субтитры', 'cc', () => openSubs()],
     ['sticker', 'Стикеры', 'sticker', () => openStickers()],
     ['overlay', 'Наложение', 'overlay', () => openAddMedia('overlay')],
     ['fx', 'Эффекты', 'sparkle', () => openEffects()],
@@ -3618,7 +3620,7 @@ function openTts() {
           const next = lines[k + 1], tx = newText(t0 + ln.t);
           tx.text = ttsWrap(ln.text, 22);
           tx.dur = Math.max(.4, (next ? next.t : r.duration) - ln.t);
-          tx.tf.y = .78;
+          tx.tf.y = .78; tx.subs = 1;
           P.items.push(tx); assignLane(tx);
         });
       }
@@ -3637,6 +3639,272 @@ function fishText(e) {
   if (s === 'FISHNET') return NATIVE ? 'Не удалось связаться с Fish Audio. Проверь интернет.' : 'Не удалось связаться с Fish Audio. Нет интернета, или их сервер не разрешает запросы со страницы — тогда этот вариант сработает только в приложении.';
   if (/decode/i.test(s)) return 'Fish Audio прислал звук, который браузер не смог прочитать.';
   return 'Не получилось озвучить: ' + s;
+}
+
+// ===== Auto subtitles: speech recognition with Whisper (transformers.js) on the device =====
+const ASR_LIBS = ['https://cdn.jsdelivr.net/npm/@huggingface/transformers@3', 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3/+esm'];
+const ASR_MODELS = [
+  { id: 'base', name: 'Быстро', sub: 'около 140 МБ', repo: 'onnx-community/whisper-base', dtype: { encoder_model: 'fp32', decoder_model_merged: 'q8' } },
+  { id: 'small', name: 'Точнее', sub: 'около 250 МБ, медленнее', repo: 'onnx-community/whisper-small', dtype: { encoder_model: 'q8', decoder_model_merged: 'q8' } },
+];
+const ASR_LANGS = [['russian', 'Русский'], ['english', 'Английский'], ['ukrainian', 'Украинский'], ['auto', 'Авто']];
+const SUB_STYLES = [['sub', 'Субтитры'], ['classic', 'Классика'], ['yellow', 'Жёлтый'], ['meme', 'Мем'], ['tag', 'Плашка']];
+const ASR_JUNK = /субтитры (сделал|делал|создавал|подготовил)|dimatorzok|редактор субтитров|корректор [а-я]|amara\.org|^(продолжение следует|спасибо за просмотр|подписывайтесь на канал)[.!…]*$/i;
+const ASR_WORKER_SRC = `
+let lib = null;
+const pipes = {};
+function silent(a) { let s = 0; for (let i = 0; i < a.length; i += 4) s += a[i] * a[i]; return Math.sqrt(s / Math.max(1, a.length / 4)) < 0.004; }
+// cut points near every 28 s, at the quietest 100 ms, so words are not split
+function windows(a, sr) {
+  const out = [], win = 28 * sr, look = 4 * sr, f = Math.round(sr / 10);
+  let o = 0;
+  while (o < a.length) {
+    let end = Math.min(a.length, o + win);
+    if (end < a.length) {
+      let best = end, bv = Infinity;
+      for (let p = end - look; p + f <= end; p += f) { let e = 0; for (let i = p; i < p + f; i += 2) e += a[i] * a[i]; if (e < bv) { bv = e; best = p + (f >> 1); } }
+      end = best;
+    }
+    out.push([o, end]);
+    o = end;
+  }
+  return out;
+}
+self.onmessage = async e => {
+  const m = e.data;
+  try {
+    if (!lib) {
+      let last = null;
+      for (const u of m.libs) { try { lib = await import(u); break; } catch (err) { last = err; } }
+      if (!lib) throw new Error('lib: ' + (last && last.message));
+      lib.env.allowLocalModels = false;
+      try { lib.env.backends.onnx.wasm.numThreads = 1; } catch (x) { /* older layout */ }
+    }
+    let p = pipes[m.model.repo];
+    if (!p) {
+      p = pipes[m.model.repo] = await lib.pipeline('automatic-speech-recognition', m.model.repo, {
+        dtype: m.model.dtype, device: 'wasm',
+        progress_callback: x => { if (x && x.status === 'progress') self.postMessage({ type: 'dl', id: m.id, file: x.file, loaded: x.loaded || 0, total: x.total || 0 }); },
+      });
+    }
+    const a = m.audio, sr = 16000, ws = windows(a, sr), out = [];
+    for (let k = 0; k < ws.length; k++) {
+      const [o, end] = ws[k], piece = a.subarray(o, end);
+      self.postMessage({ type: 'prog', id: m.id, i: k, n: ws.length });
+      if (piece.length < sr * .3 || silent(piece)) continue;
+      const opts = { task: 'transcribe', return_timestamps: true };
+      if (m.lang !== 'auto') opts.language = m.lang;
+      const r = await p(piece, opts);
+      const chunks = r.chunks && r.chunks.length ? r.chunks : [{ timestamp: [0, piece.length / sr], text: r.text || '' }];
+      for (const c of chunks) {
+        const t0 = (c.timestamp && c.timestamp[0] != null ? c.timestamp[0] : 0), t1 = (c.timestamp && c.timestamp[1] != null ? c.timestamp[1] : piece.length / sr);
+        out.push({ t0: o / sr + t0, t1: o / sr + Math.max(t0 + .3, t1), text: String(c.text || '').trim() });
+      }
+    }
+    self.postMessage({ type: 'ok', id: m.id, chunks: out });
+  } catch (err) { self.postMessage({ type: 'err', id: m.id, msg: String(err && err.message || err) }); }
+};
+`;
+const ASR = { worker: null, reqs: new Map(), loaded: {} };
+function asrWorker() {
+  if (ASR.worker) return ASR.worker;
+  const url = URL.createObjectURL(new Blob([ASR_WORKER_SRC], { type: 'text/javascript' }));
+  const w = ASR.worker = new Worker(url, { type: 'module' });
+  w.onmessage = e => {
+    const m = e.data, r = ASR.reqs.get(m.id);
+    if (!r) return;
+    if (m.type === 'dl' || m.type === 'prog') { r.on(m); return; }
+    ASR.reqs.delete(m.id);
+    if (m.type === 'err') r.rej(new Error(m.msg)); else r.res(m.chunks);
+  };
+  w.onerror = e => { for (const r of ASR.reqs.values()) r.rej(new Error(e.message || 'worker')); ASR.reqs.clear(); try { w.terminate(); } catch (x) { /* ignore */ } ASR.worker = null; };
+  return w;
+}
+function asrRun(audio, model, lang, on) {
+  return new Promise((res, rej) => {
+    const id = uid(), w = asrWorker();
+    ASR.reqs.set(id, { res, rej, on });
+    w.postMessage({ id, libs: ASR_LIBS, model, lang, audio }, [audio.buffer]);
+  });
+}
+// the project's speech as 16 kHz mono: video clips and voice tracks (no music or sound effects)
+const asrDecoded = new Map();
+async function decode16k(m) {
+  if (asrDecoded.has(m.id)) return asrDecoded.get(m.id);
+  let out = null;
+  try {
+    const oc = new OfflineAudioContext(1, 16000, 16000);
+    const buf = await oc.decodeAudioData(await m.blob.arrayBuffer());
+    const n = buf.length, ch = buf.numberOfChannels;
+    out = new Float32Array(n);
+    for (let c = 0; c < ch; c++) { const d = buf.getChannelData(c); for (let i = 0; i < n; i++) out[i] += d[i] / ch; }
+  } catch (e) { out = null; }
+  asrDecoded.set(m.id, out);
+  return out;
+}
+async function asrMix(onStage) {
+  layout();
+  const sr = 16000, total = Math.max(D, 0.1), out = new Float32Array(Math.ceil(total * sr) + 1);
+  const srcs = [];
+  for (const c of P.clips) if (c.kind === 'video') srcs.push(c);
+  for (const it of P.items) if ((it.type === 'audio' && it.src !== 'music' && it.src !== 'sfx') || (it.type === 'overlay' && it.kind === 'video')) srcs.push(it);
+  let used = 0;
+  for (let k = 0; k < srcs.length; k++) {
+    const o = srcs[k], vol = o.volume ?? 1, m = media.get(o.mediaId);
+    onStage('mix', k / srcs.length);
+    if (vol <= 0 || !m || !m.blob) continue;
+    const a = await decode16k(m);
+    if (!a) continue;
+    const st = oStart(o), dur = clipDur(o), sp = o.speed || 1, i0 = Math.round(st * sr), n = Math.min(Math.round(dur * sr), out.length - i0);
+    for (let i = 0; i < n; i++) {
+      const j = Math.floor((o.in + i / sr * sp) * sr);
+      if (j >= a.length) break;
+      if (j >= 0) out[i0 + i] += a[j] * vol;
+    }
+    used++;
+  }
+  if (!used) return null;
+  let pk = 0;
+  for (let i = 0; i < out.length; i++) { const v = out[i] < 0 ? -out[i] : out[i]; if (v > pk) pk = v; }
+  if (pk < 1e-4) return null;
+  const k = .9 / pk;
+  for (let i = 0; i < out.length; i++) out[i] *= k;
+  return out;
+}
+// split recognized phrases into short captions, timed by length
+function subsFromChunks(chunks, maxChars) {
+  const res = [];
+  for (const c of chunks) {
+    const text = c.text.replace(/\s+/g, ' ').trim();
+    if (!text || ASR_JUNK.test(text) || /^[\s.,!?…-]*$/.test(text)) continue;
+    const words = text.split(' '), groups = [];
+    let cur = '';
+    for (const w of words) {
+      if (cur && (cur.length + 1 + w.length > maxChars || /[.!?…]$/.test(cur))) { groups.push(cur); cur = w; }
+      else cur = cur ? cur + ' ' + w : w;
+    }
+    if (cur) groups.push(cur);
+    const tot = groups.reduce((a, g) => a + g.length, 0) || 1, span = Math.max(.3, c.t1 - c.t0);
+    let t = c.t0;
+    for (const g of groups) { const d = span * g.length / tot; res.push({ t, d, text: g }); t += d; }
+  }
+  return res;
+}
+function subItems() { return P.items.filter(it => it.type === 'text' && it.subs).sort((a, b) => a.start - b.start); }
+function addSubItem(t, d, text, style) {
+  const tx = newText(t);
+  applyPreset(tx, style || 'sub');
+  tx.text = ttsWrap(text, 24); tx.dur = Math.max(.3, d); tx.tf.y = .8; tx.subs = 1;
+  P.items.push(tx); assignLane(tx);
+  return tx;
+}
+function asrErrorText(e) {
+  const s = String(e && e.message || e);
+  if (/lib:|import|Failed to fetch|NetworkError|fetch|HTTP|Could not locate|load/i.test(s)) return 'Не получилось скачать распознавание речи. Нужен интернет — только в первый раз.';
+  if (/memory|alloc|Aborted/i.test(s)) return 'Телефону не хватило памяти. Выбери «Быстро» или закрой другие приложения.';
+  return 'Не получилось распознать речь: ' + s;
+}
+
+function openSubs() {
+  if (!P) return;
+  const pref = (() => { try { return JSON.parse(localStorage.getItem('narezka.subs') || 'null') || {}; } catch (e) { return {}; } })();
+  const st = {
+    lang: ASR_LANGS.some(l => l[0] === pref.lang) ? pref.lang : 'russian',
+    model: ASR_MODELS.some(m => m.id === pref.model) ? pref.model : 'base',
+    style: SUB_STYLES.some(x => x[0] === pref.style) ? pref.style : 'sub',
+    replace: pref.replace !== false, busy: false,
+  };
+  const save = () => { try { localStorage.setItem('narezka.subs', JSON.stringify({ lang: st.lang, model: st.model, style: st.style, replace: st.replace })); } catch (e) { /* ignore */ } };
+  openSheet('Субтитры', body => {
+    const tabs = tabsEl(['Автоматически', 'Список фраз'], 0, i => { auto.hidden = i !== 0; list.hidden = i !== 1; if (i === 1) drawList(); });
+    // --- automatic ---
+    const auto = el('div', { class: 'col' });
+    const modelHint = el('p', { class: 'hint' });
+    const showModel = () => { const m = ASR_MODELS.find(x => x.id === st.model); modelHint.textContent = m.name + ' — модель Whisper ' + m.sub + '. Скачается один раз, дальше работает без интернета.'; };
+    const status = el('p', { class: 'hint center', role: 'status' });
+    const bar = el('div', { class: 'prog', hidden: true }), barIn = el('i');
+    bar.append(barIn);
+    const go = el('button', { class: 'btn primary', style: 'flex-basis:100%' });
+    go.innerHTML = icon('cc') + 'Создать субтитры';
+    const stage = (s, p, extra) => {
+      bar.hidden = false;
+      barIn.style.width = Math.max(4, Math.min(100, p * 100)) + '%';
+      if (s === 'mix') status.textContent = 'Собираю звук из видео и озвучки…';
+      else if (s === 'dl') status.textContent = 'Скачиваю распознавание речи' + (extra ? ': ' + extra : '…');
+      else if (s === 'asr') status.textContent = 'Распознаю речь… ' + Math.round(p * 100) + '%';
+    };
+    go.addEventListener('click', async () => {
+      if (st.busy) return;
+      if (!D) { toast('Сначала добавь видео или озвучку'); return; }
+      st.busy = true; go.disabled = true; go.style.opacity = .5;
+      try {
+        const audio = await asrMix(stage);
+        if (!audio) { status.textContent = 'В проекте нет звука с речью. Субтитры берутся из видео и озвучки — музыка не учитывается.'; return; }
+        const model = ASR_MODELS.find(x => x.id === st.model);
+        const files = {};
+        const chunks = await asrRun(audio, { repo: model.repo, dtype: model.dtype }, st.lang, m => {
+          if (m.type === 'dl') {
+            files[m.file] = [m.loaded, m.total];
+            let a = 0, b = 0;
+            for (const k in files) { a += files[k][0]; b += files[k][1]; }
+            stage('dl', b ? a / b : 0, fmtSize(a) + (b ? ' из ' + fmtSize(b) : ''));
+          } else stage('asr', m.n ? m.i / m.n : 0);
+        });
+        const subs = subsFromChunks(chunks, 32);
+        if (!subs.length) { status.textContent = 'Речь не распознана. Проверь язык или громкость голоса.'; return; }
+        if (st.replace) P.items = P.items.filter(it => !(it.type === 'text' && it.subs));
+        for (const x of subs) addSubItem(x.t, x.d, x.text, st.style);
+        layout();
+        closeSheet();
+        select(null);
+        const n = subs.length, n10 = n % 10, n100 = n % 100;
+        const w = n10 === 1 && n100 !== 11 ? 'субтитр' : n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14) ? 'субтитра' : 'субтитров';
+        toast('Готово: ' + n + ' ' + w + '. Нажми на любой, чтобы исправить текст.', 4000);
+      } catch (e) {
+        console.warn('asr', e);
+        status.textContent = asrErrorText(e);
+      } finally {
+        st.busy = false; go.disabled = false; go.style.opacity = ''; bar.hidden = true;
+      }
+    });
+    auto.append(
+      el('p', { class: 'hint' }, 'Приложение само распознает речь в видео и озвучке и расставит текст по времени. Музыка и звуки не учитываются.'),
+      sec('Язык речи'), chipRow(ASR_LANGS, st.lang, v => { st.lang = v; save(); }),
+      sec('Распознавание'), chipRow(ASR_MODELS.map(m => [m.id, m.name]), st.model, v => { st.model = v; save(); showModel(); }), modelHint,
+      sec('Стиль'), chipRow(SUB_STYLES, st.style, v => { st.style = v; save(); }),
+      toggleRow('Заменить старые субтитры', st.replace, v => { st.replace = v; save(); }),
+      bar, status, el('div', { class: 'btns' }, go),
+    );
+    showModel();
+    // --- manual list ---
+    const list = el('div', { class: 'col', hidden: true });
+    const drawList = () => {
+      list.innerHTML = '';
+      const items = subItems();
+      const add = el('button', { class: 'btn', style: 'flex-basis:100%' });
+      add.innerHTML = icon('plus') + 'Добавить фразу на курсоре';
+      add.addEventListener('click', () => { addSubItem(E.t, 2, 'Текст', st.style); layout(); commit(); drawList(); });
+      if (!items.length) list.append(el('p', { class: 'hint' }, 'Субтитров пока нет. Создай их автоматически или добавь фразу вручную.'));
+      for (const it of items) {
+        const ta = el('textarea', { class: 'txtin', rows: 2, 'aria-label': 'Текст субтитра' });
+        ta.style.minHeight = '48px'; ta.style.fontSize = '15px';
+        ta.value = it.text.replace(/\n/g, ' ');
+        ta.addEventListener('input', () => { it.text = ttsWrap(ta.value.replace(/\s+/g, ' ').trim() || ' ', 24); it._lk = null; markDirty(); });
+        ta.addEventListener('change', () => commit());
+        const tm = el('button', { class: 'chipbtn', onclick: () => { E.t = it.start + .01; markDirty(); tlDirty = true; } }, fmtTime(it.start));
+        const del = el('button', { class: 'iconbtn sm', 'aria-label': 'Удалить субтитр', html: icon('trash'), onclick: () => { P.items = P.items.filter(x => x !== it); layout(); commit(); drawList(); } });
+        list.append(el('div', { class: 'lrow', style: 'align-items:flex-start' }, el('div', { class: 'lname' }, el('div', { class: 'trow' }, tm, del), ta)));
+      }
+      list.append(el('div', { class: 'btns' }, add));
+      if (items.length) {
+        const all = el('button', { class: 'btn danger', style: 'flex-basis:100%' });
+        all.innerHTML = icon('trash') + 'Удалить все субтитры';
+        all.addEventListener('click', async () => { if (await askConfirm('Удалить все субтитры?', 'Будут удалены ' + items.length + ' фраз.', 'Удалить', true)) { P.items = P.items.filter(x => !(x.type === 'text' && x.subs)); layout(); commit(); drawList(); } });
+        list.append(el('div', { class: 'btns' }, all));
+      }
+    };
+    body.append(tabs, auto, list);
+  }, { tall: true });
 }
 
 // --- voice-over (only when the page runs on its own in a browser) ---
